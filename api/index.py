@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Request
 from telegram import Update
-from bot_app import build_application
+from api.bot_app import build_application
 from mangum import Mangum
 
 app = FastAPI()
