@@ -18,21 +18,19 @@ async def ensure_initialized() -> None:
 
 @app.get("/")
 async def root():
-    return {"ok": True, "message": "Bot server is live"}
+    return {"ok": True, "message": "API root is live"}
 
 
-@app.get("/api/telegram")
+@app.get("/telegram")
 async def healthcheck():
     await ensure_initialized()
     return {"ok": True, "message": "Telegram webhook is live"}
 
 
-@app.post("/api/telegram")
+@app.post("/telegram")
 async def telegram_webhook(request: Request):
     await ensure_initialized()
-
     data = await request.json()
     update = Update.de_json(data, telegram_app.bot)
     await telegram_app.process_update(update)
-
     return {"ok": True}
