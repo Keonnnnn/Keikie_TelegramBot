@@ -1,7 +1,6 @@
 from fastapi import FastAPI, Request
 from telegram import Update
-from api.bot_app import build_application
-from mangum import Mangum
+from bot_app import build_application
 
 app = FastAPI()
 
@@ -22,19 +21,16 @@ async def root():
     return {"ok": True, "message": "API root is live"}
 
 
-@app.get("/api/telegram")   # ← changed from /telegram
+@app.get("/api/telegram")
 async def healthcheck():
     await ensure_initialized()
     return {"ok": True, "message": "Telegram webhook is live"}
 
 
-@app.post("/api/telegram")  # ← changed from /telegram
+@app.post("/api/telegram")
 async def telegram_webhook(request: Request):
     await ensure_initialized()
     data = await request.json()
     update = Update.de_json(data, telegram_app.bot)
     await telegram_app.process_update(update)
     return {"ok": True}
-
-
-handler = Mangum(app)  # ← required for Vercel
