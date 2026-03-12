@@ -16,15 +16,13 @@ import os
 import copy
 from dotenv import load_dotenv
 from telegram import (
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
+    ReplyKeyboardMarkup,
     ReplyKeyboardRemove,
     Update,
 )
 from telegram.ext import (
     Application,
     ApplicationBuilder,
-    CallbackQueryHandler,
     CommandHandler,
     ConversationHandler,
     ContextTypes,
@@ -83,11 +81,8 @@ def fmt(amount: float) -> str:
     return f"${amount:.2f}"
 
 
-def yn_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ Yes", callback_data="yes"),
-        InlineKeyboardButton("❌ No",  callback_data="no"),
-    ]])
+def yn_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup([["Yes", "No"]], resize_keyboard=True, one_time_keyboard=True)
 
 
 def progress(data: dict) -> str:
@@ -279,10 +274,11 @@ async def restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def split_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.clear()
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("⚖️ Equal",      callback_data="equal"),
-        InlineKeyboardButton("🧮 Individual", callback_data="individual"),
-    ]])
+    keyboard = ReplyKeyboardMarkup(
+        [["⚖️ Equal", "🧮 Individual"]],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+    )
     await update.message.reply_text(
         "How do you want to split the bill?",
         reply_markup=keyboard,
@@ -291,32 +287,34 @@ async def split_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 
 
 async def choose_split_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await query.answer()
-    choice = query.data
-    push_history(context, CHOICE)
-
-    if choice == "equal":
+    choice = update.message.text.strip().lower()
+    # Accept both plain text and the emoji-prefixed button labels
+    if "equal" in choice:
+        push_history(context, CHOICE)
         context.user_data["split_type"] = "equal"
-        await query.edit_message_text("⚖️ *Equal split* selected.", parse_mode="Markdown")
-        await context.bot.send_message(
-            chat_id=query.message.chat_id,
-            text="Enter the *total bill amount* (the final number on the receipt):",
+        await update.message.reply_text(
+            "⚖️ *Equal split* selected.\n\nEnter the *total bill amount* (the final number on the receipt):",
             parse_mode="Markdown",
+            reply_markup=ReplyKeyboardRemove(),
         )
         return TOTAL
 
-    context.user_data["split_type"]           = "individual"
-    context.user_data["names"]                = []
-    context.user_data["amounts_by_person"]    = {}
-    context.user_data["shared_items"]         = []
-    context.user_data["current_person_index"] = 0
-    await query.edit_message_text("🧮 *Individual split* selected.", parse_mode="Markdown")
-    await context.bot.send_message(
-        chat_id=query.message.chat_id,
-        text="How many people are splitting the bill?",
-    )
-    return PEOPLE_INDIV
+    if "individual" in choice:
+        push_history(context, CHOICE)
+        context.user_data["split_type"]           = "individual"
+        context.user_data["names"]                = []
+        context.user_data["amounts_by_person"]    = {}
+        context.user_data["shared_items"]         = []
+        context.user_data["current_person_index"] = 0
+        await update.message.reply_text(
+            "🧮 *Individual split* selected.\n\nHow many people are splitting the bill?",
+            parse_mode="Markdown",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+        return PEOPLE_INDIV
+
+    await update.message.reply_text("Please tap *Equal* or *Individual*.", parse_mode="Markdown")
+    return CHOICE
 
 
 # ─────────────────────────────────────────────────────────
@@ -527,21 +525,23 @@ async def _advance_to_next_person_or_shared(update: Update, context: ContextType
 # ─────────────────────────────────────────────────────────
 
 async def shared_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await query.answer()
+    choice = update.message.text.strip().lower()
     push_history(context, SHARED_CONFIRM)
 
-    if query.data == "yes":
-        await query.edit_message_text(
+    if "yes" in choice:
+        await update.message.reply_text(
             "Enter the shared item as:\n`Name, amount`\n_(e.g. `Wine, 45.00`)_",
             parse_mode="Markdown",
+            reply_markup=ReplyKeyboardRemove(),
         )
         return SHARED_NAME_AMT
 
-    await query.edit_message_text("No shared items. Moving on…")
-    await context.bot.send_message(
-        chat_id=query.message.chat_id,
-        text="Enter *GST* percentage (e.g. `9`), or `0` for none.",
+    await update.message.reply_text(
+        "No shared items. Moving on…",
+        reply_markup=ReplyKeyboardRemove(),
+    )
+    await update.message.reply_text(
+        "Enter *GST* percentage (e.g. `9`), or `0` for none.",
         parse_mode="Markdown",
     )
     return GST
@@ -673,7 +673,7 @@ def build_application() -> Application:
     conv = ConversationHandler(
         entry_points=[CommandHandler("split", split_start)],
         states={
-            CHOICE:         [CallbackQueryHandler(choose_split_type)],
+            CHOICE:         [MessageHandler(filters.TEXT & ~filters.COMMAND, choose_split_type)],
             TOTAL:          [MessageHandler(filters.TEXT & ~filters.COMMAND, get_total)],
             PEOPLE_EQUAL:   [MessageHandler(filters.TEXT & ~filters.COMMAND, get_people_equal)],
             PEOPLE_INDIV:   [MessageHandler(filters.TEXT & ~filters.COMMAND, get_people_individual)],
@@ -682,7 +682,7 @@ def build_application() -> Application:
             ITEM_NAME:      [MessageHandler(filters.TEXT & ~filters.COMMAND, get_item_name)],
             ITEM_AMOUNT:    [MessageHandler(filters.TEXT & ~filters.COMMAND, get_individual_amount)],
             REVIEW_PERSON:  [MessageHandler(filters.TEXT & ~filters.COMMAND, review_person)],
-            SHARED_CONFIRM: [CallbackQueryHandler(shared_confirm)],
+            SHARED_CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, shared_confirm)],
             SHARED_NAME_AMT:[MessageHandler(filters.TEXT & ~filters.COMMAND, shared_name_amt)],
             SHARED_PEOPLE:  [MessageHandler(filters.TEXT & ~filters.COMMAND, shared_people)],
             GST:            [MessageHandler(filters.TEXT & ~filters.COMMAND, get_gst)],
