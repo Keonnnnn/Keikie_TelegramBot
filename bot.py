@@ -1,10 +1,10 @@
 """
-Keke Bill Splitter Bot — bot.py
-All conversation logic lives here. bot_app.py imports build_application() from this file.
+Keke Bill Splitter Bot — bot_app.py
 """
 
 import os
 import copy
+import logging
 from dotenv import load_dotenv
 from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove, Update
 from telegram.ext import (
@@ -15,6 +15,11 @@ from telegram.ext import (
     ContextTypes,
     MessageHandler,
     filters,
+)
+
+logging.basicConfig(
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    level=logging.INFO
 )
 
 load_dotenv()
@@ -79,6 +84,17 @@ def progress(data: dict) -> str:
 
 
 # ─────────────────────────────────────────────────────────
+# Logging incoming messages
+# ─────────────────────────────────────────────────────────
+
+async def log_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.message and update.message.text:
+        user = update.message.from_user
+        name = user.username or user.first_name or "unknown"
+        print(f"[{name}]: {update.message.text}")
+
+
+# ─────────────────────────────────────────────────────────
 # Undo / history
 # ─────────────────────────────────────────────────────────
 
@@ -92,16 +108,16 @@ def push_history(context: ContextTypes.DEFAULT_TYPE, state: int) -> None:
 
 def _re_prompt(state: int, data: dict) -> str:
     prompts = {
-        CHOICE:         "How do you want to split the bill? Tap *Equal* or *Individual*.",
+        CHOICE:         "How do you want to split the bill? Tap Equal or Individual.",
         TOTAL:          "Enter the total bill amount:",
         PEOPLE_EQUAL:   "How many people are splitting the bill?",
         PEOPLE_INDIV:   "How many people are splitting the bill?",
         NAME_INDIV:     f"{progress(data)}What's the name of Person {data.get('current_person_index', 0) + 1}?",
-        ITEM_COUNT:     f"How many items did *{data.get('current_name', '?')}* order?",
+        ITEM_COUNT:     f"How many items did {data.get('current_name', '?')} order?",
         ITEM_NAME:      f"What's the name of {data.get('current_name', '?')}'s item {data.get('current_item', '?')}?",
-        ITEM_AMOUNT:    f"Enter the amount for *{data.get('current_item_name', 'the item')}*:",
-        REVIEW_PERSON:  "Review items above. Reply *done* to confirm or *edit N* to remove item N.",
-        SHARED_CONFIRM: "Do you have any shared items to add? Tap *Yes* or *No*.",
+        ITEM_AMOUNT:    f"Enter the amount for {data.get('current_item_name', 'the item')}:",
+        REVIEW_PERSON:  "Review items above. Reply done / edit N / remove N.",
+        SHARED_CONFIRM: "Do you have any shared items to add? Tap Yes or No.",
         SHARED_NAME_AMT:"Enter the shared item as: Name, amount",
         SHARED_PEOPLE:  "Who shares this item? Enter names separated by commas.",
         GST:            "Enter GST percentage (e.g. 9), or 0 for none.",
@@ -123,7 +139,7 @@ async def undo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     label = STATE_LABELS.get(prev_state, "previous step")
     await update.message.reply_text(
-        f"↩️ Undone! Back to: {label}\n\n" + _re_prompt(prev_state, context.user_data),
+        f"Undone! Back to: {label}\n\n" + _re_prompt(prev_state, context.user_data),
         reply_markup=ReplyKeyboardRemove(),
     )
     return prev_state
@@ -134,7 +150,6 @@ async def undo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 # ─────────────────────────────────────────────────────────
 
 def build_summary(data: dict) -> str:
-    """Returns plain text — NO parse_mode needed, safe for any user input."""
     lines = ["🧾 BILL SUMMARY", "━━━━━━━━━━━━━━━━━━━━━", ""]
     gst     = data.get("gst",     0.0)
     service = data.get("service", 0.0)
@@ -152,8 +167,8 @@ def build_summary(data: dict) -> str:
 
     else:
         names        = data["names"]
-        amounts_by   = data["amounts_by_person"]    # {name: [(item_name, amount)]}
-        shared_items = data.get("shared_items", []) # [(name, amount, [people])]
+        amounts_by   = data["amounts_by_person"]
+        shared_items = data.get("shared_items", [])
 
         person_base: dict = {n: sum(a for _, a in amounts_by.get(n, [])) for n in names}
         for _iname, iamt, sharers in shared_items:
@@ -202,28 +217,26 @@ def build_summary(data: dict) -> str:
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
-        "👋 Hi! I'm *Keke*, your bill-splitting assistant.\n\n"
+        "👋 Hi! I'm Keke, your bill-splitting assistant.\n\n"
         "Commands:\n"
         "  /split — start a new split\n"
         "  /undo — undo the last step\n"
         "  /restart — restart from scratch\n"
         "  /cancel — quit\n"
-        "  /help — how to use me",
-        
+        "  /help — how to use me"
     )
 
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
-        "💡 *How Keke works*\n\n"
-        "*Equal split* — enter the final receipt total and number of people.\n\n"
-        "*Individual split* — enter each person's name and their items (name + price). "
+        "💡 How Keke works\n\n"
+        "Equal split — enter the final receipt total and number of people.\n\n"
+        "Individual split — enter each person's name and their items (name + price). "
         "Optionally add shared items split among specific people, then set GST and service charge.\n\n"
         "At any prompt:\n"
         "  /undo — go back one step\n"
         "  /restart — start over\n"
-        "  /cancel — quit",
-        
+        "  /cancel — quit"
     )
 
 
@@ -235,7 +248,7 @@ async def restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 # ─────────────────────────────────────────────────────────
-# Conversation entry — split type choice
+# Conversation entry
 # ─────────────────────────────────────────────────────────
 
 async def split_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -253,9 +266,7 @@ async def choose_split_type(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         push_history(context, CHOICE)
         context.user_data["split_type"] = "equal"
         await update.message.reply_text(
-            "⚖️ Equal split selected.\n\n"
-            "Enter the total bill amount (the final number on the receipt):",
-            
+            "⚖️ Equal split selected.\n\nEnter the total bill amount (the final number on the receipt):",
             reply_markup=ReplyKeyboardRemove(),
         )
         return TOTAL
@@ -268,8 +279,7 @@ async def choose_split_type(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         context.user_data["shared_items"]         = []
         context.user_data["current_person_index"] = 0
         await update.message.reply_text(
-            "🧮 *Individual split* selected.\n\nHow many people are splitting the bill?",
-            
+            "🧮 Individual split selected.\n\nHow many people are splitting the bill?",
             reply_markup=ReplyKeyboardRemove(),
         )
         return PEOPLE_INDIV
@@ -288,8 +298,7 @@ async def get_total(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         if total <= 0:
             raise ValueError
     except ValueError:
-        await update.message.reply_text("⚠️ Please enter a valid positive number (e.g. 45.80).",
-                                        parse_mode="Markdown")
+        await update.message.reply_text("⚠️ Please enter a valid positive number (e.g. 45.80).")
         return TOTAL
     push_history(context, TOTAL)
     context.user_data["total"] = total
@@ -340,8 +349,7 @@ async def get_name_individual(update: Update, context: ContextTypes.DEFAULT_TYPE
     context.user_data["amounts_by_person"][name] = []
     context.user_data["current_name"] = name
     await update.message.reply_text(
-        f"{progress(context.user_data)}How many items did {name} order?",
-    )
+        f"{progress(context.user_data)}How many items did {name} order?")
     return ITEM_COUNT
 
 
@@ -363,8 +371,7 @@ async def get_item_count(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     name = context.user_data["current_name"]
     await update.message.reply_text(
         f"{progress(context.user_data)}Item 1/{count} for {name} — what's it called?\n"
-        f"(type - to skip naming it)",
-    )
+        f"(type - to skip naming it)")
     return ITEM_NAME
 
 
@@ -378,8 +385,7 @@ async def get_item_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     item_count = context.user_data["item_count"]
     await update.message.reply_text(
         f"{progress(context.user_data)}How much did {item_label} cost? "
-        f"({name}'s item {item_num}/{item_count})",
-    )
+        f"({name}'s item {item_num}/{item_count})")
     return ITEM_AMOUNT
 
 
@@ -389,8 +395,7 @@ async def get_individual_amount(update: Update, context: ContextTypes.DEFAULT_TY
         if amount < 0:
             raise ValueError
     except ValueError:
-        await update.message.reply_text("⚠️ Please enter a valid amount (e.g. 13.95).",
-                                        parse_mode="Markdown")
+        await update.message.reply_text("⚠️ Please enter a valid amount (e.g. 13.95).")
         return ITEM_AMOUNT
 
     push_history(context, ITEM_AMOUNT)
@@ -405,8 +410,7 @@ async def get_individual_amount(update: Update, context: ContextTypes.DEFAULT_TY
         context.user_data["current_item"] = next_item
         await update.message.reply_text(
             f"{progress(context.user_data)}Item {next_item}/{item_count} for {name} — what's it called?\n"
-            f"(type - to skip)",
-        )
+            f"(type - to skip)")
         return ITEM_NAME
 
     return await _show_person_review(update, context, name)
@@ -438,7 +442,6 @@ async def review_person(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         push_history(context, REVIEW_PERSON)
         return await _advance_to_next_person_or_shared(update, context)
 
-    # edit N — ask for new price interactively
     if text.startswith("edit "):
         parts = text.split()
         if len(parts) == 2 and parts[1].isdigit():
@@ -449,12 +452,11 @@ async def review_person(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
                 await update.message.reply_text(
                     f"Current price of {iname} is {fmt(iamt)}. What's the new price?")
                 return EDIT_PRICE
-            await update.message.reply_text(f"⚠️ Item number out of range (1–{len(items)}).")
+            await update.message.reply_text(f"⚠️ Item number out of range (1-{len(items)}).")
             return REVIEW_PERSON
         await update.message.reply_text("⚠️ Use: edit N  (e.g. edit 2)")
         return REVIEW_PERSON
 
-    # remove N — delete item N
     if text.startswith("remove "):
         parts = text.split()
         if len(parts) == 2 and parts[1].isdigit():
@@ -467,7 +469,7 @@ async def review_person(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
                 await update.message.reply_text(
                     f"No items left for {name}. How many items did they order?")
                 return ITEM_COUNT
-            await update.message.reply_text(f"⚠️ Item number out of range (1–{len(items)}).")
+            await update.message.reply_text(f"⚠️ Item number out of range (1-{len(items)}).")
             return REVIEW_PERSON
         await update.message.reply_text("⚠️ Use: remove N  (e.g. remove 1)")
         return REVIEW_PERSON
@@ -520,15 +522,13 @@ async def shared_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     if "yes" in choice:
         await update.message.reply_text(
-            "Enter the shared item as:\nName, amount\n_(e.g. Wine, 45.00)_",
-            
+            "Enter the shared item as:\nName, amount  (e.g. Wine, 45.00)",
             reply_markup=ReplyKeyboardRemove(),
         )
         return SHARED_NAME_AMT
 
     await update.message.reply_text("No shared items. Moving on…", reply_markup=ReplyKeyboardRemove())
-    await update.message.reply_text("Enter GST percentage (e.g. 9), or 0 for none.",
-                                    parse_mode="Markdown")
+    await update.message.reply_text("Enter GST percentage (e.g. 9), or 0 for none.")
     return GST
 
 
@@ -543,7 +543,7 @@ async def shared_name_amt(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             raise ValueError
     except ValueError:
         await update.message.reply_text(
-            "⚠️ Use the format: Name, amount (e.g. Wine, 45.00)")
+            "⚠️ Use the format: Name, amount  (e.g. Wine, 45.00)")
         return SHARED_NAME_AMT
 
     push_history(context, SHARED_NAME_AMT)
@@ -551,8 +551,7 @@ async def shared_name_amt(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     known = context.user_data["names"]
     await update.message.reply_text(
         f"Who shares {iname}? Enter names separated by commas.\n"
-        f"(Known people: {', '.join(known)})",
-    )
+        f"(Known people: {', '.join(known)})")
     return SHARED_PEOPLE
 
 
@@ -583,7 +582,7 @@ async def shared_people(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
 
 # ─────────────────────────────────────────────────────────
-# GST / Service / Tip
+# GST / Service
 # ─────────────────────────────────────────────────────────
 
 async def get_gst(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -592,13 +591,11 @@ async def get_gst(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         if v < 0:
             raise ValueError
     except ValueError:
-        await update.message.reply_text("⚠️ Enter a valid percentage like 9 or 0.",
-                                        parse_mode="Markdown")
+        await update.message.reply_text("⚠️ Enter a valid percentage like 9 or 0.")
         return GST
     push_history(context, GST)
     context.user_data["gst"] = v
-    await update.message.reply_text("Enter service charge percentage (e.g. 10), or 0.",
-                                    parse_mode="Markdown")
+    await update.message.reply_text("Enter service charge percentage (e.g. 10), or 0.")
     return SERVICE
 
 
@@ -608,16 +605,13 @@ async def get_service(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         if v < 0:
             raise ValueError
     except ValueError:
-        await update.message.reply_text("⚠️ Enter a valid percentage like 10 or 0.",
-                                        parse_mode="Markdown")
+        await update.message.reply_text("⚠️ Enter a valid percentage like 10 or 0.")
         return SERVICE
     push_history(context, SERVICE)
     context.user_data["service"] = v
     await update.message.reply_text(build_summary(context.user_data))
     await update.message.reply_text("📋 Copy the summary above and share it with your group!")
     return ConversationHandler.END
-
-
 
 
 # ─────────────────────────────────────────────────────────
@@ -632,7 +626,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 # ─────────────────────────────────────────────────────────
-# build_application  (imported by bot_app.py)
+# App builder
 # ─────────────────────────────────────────────────────────
 
 def build_application() -> Application:
@@ -667,5 +661,16 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("start",   start))
     app.add_handler(CommandHandler("help",    help_cmd))
     app.add_handler(CommandHandler("restart", restart))
+    app.add_handler(MessageHandler(filters.ALL, log_message), group=-1)
     app.add_handler(conv)
     return app
+
+
+def main() -> None:
+    app = build_application()
+    print("Bot is running...")
+    app.run_polling()
+
+
+if __name__ == "__main__":
+    main()
