@@ -38,7 +38,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
     SHARED_PEOPLE,    # 11
     GST,              # 12
     SERVICE,          # 13
-    TIP,              # 14
+    EDIT_PRICE,       # 14
 ) = range(15)
 
 STATE_LABELS = {
@@ -56,7 +56,7 @@ STATE_LABELS = {
     SHARED_PEOPLE:  "shared item people",
     GST:            "GST",
     SERVICE:        "service charge",
-    TIP:            "tip",
+    EDIT_PRICE:     "edit item price",
 }
 
 
@@ -106,7 +106,6 @@ def _re_prompt(state: int, data: dict) -> str:
         SHARED_PEOPLE:  "Who shares this item? Enter names separated by commas.",
         GST:            "Enter GST percentage (e.g. 9), or 0 for none.",
         SERVICE:        "Enter service charge percentage (e.g. 10), or 0 for none.",
-        TIP:            "Enter tip percentage (e.g. 15), or 0 for none.",
     }
     return prompts.get(state, "Please continue.")
 
@@ -139,7 +138,6 @@ def build_summary(data: dict) -> str:
     lines = ["🧾 BILL SUMMARY", "━━━━━━━━━━━━━━━━━━━━━", ""]
     gst     = data.get("gst",     0.0)
     service = data.get("service", 0.0)
-    tip     = data.get("tip",     0.0)
 
     if data.get("split_type") == "equal":
         total  = data["total"]
@@ -167,9 +165,7 @@ def build_summary(data: dict) -> str:
         service_amount = round(base_total * service / 100, 2)
         subtotal       = base_total + service_amount
         gst_amount     = round(subtotal * gst / 100, 2)
-        pre_tip        = subtotal + gst_amount
-        tip_amount     = round(pre_tip * tip / 100, 2)
-        grand_total    = pre_tip + tip_amount
+        grand_total    = subtotal + gst_amount
 
         lines += ["📌 Mode: Individual split", f"👥 People: {len(names)}", "",
                   f"  Base total :  {fmt(base_total)}"]
@@ -177,8 +173,6 @@ def build_summary(data: dict) -> str:
             lines.append(f"  Service ({service:.1f}%) :  {fmt(service_amount)}")
         if gst:
             lines.append(f"  GST ({gst:.1f}%)     :  {fmt(gst_amount)}")
-        if tip:
-            lines.append(f"  Tip ({tip:.1f}%)     :  {fmt(tip_amount)}")
         lines += ["  ────────────────────",
                   f"  Grand total :  {fmt(grand_total)}", "",
                   "💰 Per person:"]
@@ -224,7 +218,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "💡 *How Keke works*\n\n"
         "*Equal split* — enter the final receipt total and number of people.\n\n"
         "*Individual split* — enter each person's name and their items (name + price). "
-        "Optionally add shared items split among specific people, then set GST / service / tip.\n\n"
+        "Optionally add shared items split among specific people, then set GST and service charge.\n\n"
         "At any prompt:\n"
         "  /undo — go back one step\n"
         "  /restart — start over\n"
@@ -426,10 +420,10 @@ async def _show_person_review(update: Update, context: ContextTypes.DEFAULT_TYPE
         lines.append(f"  {i}. {iname} — {fmt(iamt)}")
     lines += [
         "",
-        "Commands:",
-        "  done          — confirm and continue",
-        "  edit N price  — update item price (e.g. edit 2 12.50)",
-        "  remove N      — delete an item (e.g. remove 1)",
+        "Reply:",
+        "  done     — confirm and continue",
+        "  edit N   — change price of item N  (e.g. edit 2)",
+        "  remove N — delete item N           (e.g. remove 1)",
     ]
     await update.message.reply_text("\n".join(lines))
     return REVIEW_PERSON
@@ -444,27 +438,20 @@ async def review_person(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         push_history(context, REVIEW_PERSON)
         return await _advance_to_next_person_or_shared(update, context)
 
-    # edit N price — update the price of item N
+    # edit N — ask for new price interactively
     if text.startswith("edit "):
         parts = text.split()
-        if len(parts) == 3 and parts[1].isdigit():
+        if len(parts) == 2 and parts[1].isdigit():
             idx = int(parts[1]) - 1
-            try:
-                new_price = float(parts[2])
-                if new_price < 0:
-                    raise ValueError
-            except ValueError:
-                await update.message.reply_text("⚠️ Invalid price. Use: edit N price (e.g. edit 2 12.50)")
-                return REVIEW_PERSON
             if 0 <= idx < len(items):
-                old_name, old_price = items[idx]
-                items[idx] = (old_name, new_price)
+                context.user_data["edit_item_idx"] = idx
+                iname, iamt = items[idx]
                 await update.message.reply_text(
-                    f"Updated {old_name}: {fmt(old_price)} -> {fmt(new_price)}")
-                return await _show_person_review(update, context, name)
+                    f"Current price of {iname} is {fmt(iamt)}. What's the new price?")
+                return EDIT_PRICE
             await update.message.reply_text(f"⚠️ Item number out of range (1–{len(items)}).")
             return REVIEW_PERSON
-        await update.message.reply_text("⚠️ Use: edit N price (e.g. edit 2 12.50)")
+        await update.message.reply_text("⚠️ Use: edit N  (e.g. edit 2)")
         return REVIEW_PERSON
 
     # remove N — delete item N
@@ -482,12 +469,28 @@ async def review_person(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
                 return ITEM_COUNT
             await update.message.reply_text(f"⚠️ Item number out of range (1–{len(items)}).")
             return REVIEW_PERSON
-        await update.message.reply_text("⚠️ Use: remove N (e.g. remove 1)")
+        await update.message.reply_text("⚠️ Use: remove N  (e.g. remove 1)")
         return REVIEW_PERSON
 
-    await update.message.reply_text(
-        "⚠️ Commands: done / edit N price / remove N")
+    await update.message.reply_text("⚠️ Reply: done / edit N / remove N")
     return REVIEW_PERSON
+
+
+async def edit_price(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    name  = context.user_data["current_name"]
+    items = context.user_data["amounts_by_person"][name]
+    idx   = context.user_data.get("edit_item_idx", 0)
+    try:
+        new_price = float(update.message.text.strip())
+        if new_price < 0:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text("⚠️ Please enter a valid price (e.g. 12.50).")
+        return EDIT_PRICE
+    old_name, old_price = items[idx]
+    items[idx] = (old_name, new_price)
+    await update.message.reply_text(f"Updated {old_name}: {fmt(old_price)} -> {fmt(new_price)}")
+    return await _show_person_review(update, context, name)
 
 
 async def _advance_to_next_person_or_shared(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -610,25 +613,11 @@ async def get_service(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         return SERVICE
     push_history(context, SERVICE)
     context.user_data["service"] = v
-    await update.message.reply_text("Enter tip percentage (e.g. 15), or 0.",
-                                    parse_mode="Markdown")
-    return TIP
-
-
-async def get_tip(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    try:
-        v = float(update.message.text.strip())
-        if v < 0:
-            raise ValueError
-    except ValueError:
-        await update.message.reply_text("⚠️ Enter a valid percentage like 15 or 0.",
-                                        parse_mode="Markdown")
-        return TIP
-    push_history(context, TIP)
-    context.user_data["tip"] = v
     await update.message.reply_text(build_summary(context.user_data))
     await update.message.reply_text("📋 Copy the summary above and share it with your group!")
     return ConversationHandler.END
+
+
 
 
 # ─────────────────────────────────────────────────────────
@@ -661,12 +650,12 @@ def build_application() -> Application:
             ITEM_NAME:      [MessageHandler(filters.TEXT & ~filters.COMMAND, get_item_name)],
             ITEM_AMOUNT:    [MessageHandler(filters.TEXT & ~filters.COMMAND, get_individual_amount)],
             REVIEW_PERSON:  [MessageHandler(filters.TEXT & ~filters.COMMAND, review_person)],
+            EDIT_PRICE:     [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_price)],
             SHARED_CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, shared_confirm)],
             SHARED_NAME_AMT:[MessageHandler(filters.TEXT & ~filters.COMMAND, shared_name_amt)],
             SHARED_PEOPLE:  [MessageHandler(filters.TEXT & ~filters.COMMAND, shared_people)],
             GST:            [MessageHandler(filters.TEXT & ~filters.COMMAND, get_gst)],
             SERVICE:        [MessageHandler(filters.TEXT & ~filters.COMMAND, get_service)],
-            TIP:            [MessageHandler(filters.TEXT & ~filters.COMMAND, get_tip)],
         },
         fallbacks=[
             CommandHandler("cancel",  cancel),
