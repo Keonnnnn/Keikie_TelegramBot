@@ -649,3 +649,13 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("restart", restart))
     app.add_handler(conv)
     return app
+
+
+def main() -> None:
+    app = build_application()
+    print("Bot is running...")
+    app.run_polling()
+
+
+if __name__ == "__main__":
+    main()
