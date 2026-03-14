@@ -326,8 +326,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     ])
     await update.message.reply_text(
         "👋 Hi! I'm *Keke*, your handy all-in-one assistant!\n\n"
-        "I'm still growing — right now I can help you split bills, "
-        "with more useful tools on the way. 🛠️\n\n"
+        "Right now, I can help you split restaurant bills fairly — equally or by individual orders, "
+        "with shared items, GST, and service charge all handled for you. 🧾\n\n"
+        "More useful tools are on the way. Stay tuned! 🛠️\n\n"
         "What would you like to do?",
         parse_mode="Markdown",
         reply_markup=keyboard,
