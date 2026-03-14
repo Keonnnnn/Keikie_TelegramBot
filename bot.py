@@ -33,9 +33,9 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 # ─────────────────────────────────────────────────────────
-# Sticker — replace with your file_id after finding it
+# Sticker
 # ─────────────────────────────────────────────────────────
-STICKER_ID = None  # e.g. "CAACAgIAAxkBAAI..."
+STICKER_ID = "CAACAgIAAxkBAAIDA2m1MG5DIROtxbH-hHIhKWtM41kJAAL3AANWnb0KC3IkHUj0DTA6BA"
 
 
 # ─────────────────────────────────────────────────────────
@@ -272,8 +272,7 @@ def build_summary(data: dict) -> str:
 # ─────────────────────────────────────────────────────────
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if STICKER_ID:
-        await update.message.reply_sticker(STICKER_ID)
+    await update.message.reply_sticker(STICKER_ID)
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("➗  Split a bill", callback_data="cmd_split")],
         [InlineKeyboardButton("💡  How it works", callback_data="cmd_help")],
