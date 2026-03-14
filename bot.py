@@ -10,7 +10,6 @@ from telegram import (
     BotCommand,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
-    ReplyKeyboardMarkup,
     ReplyKeyboardRemove,
     Update,
 )
@@ -81,8 +80,20 @@ def fmt(amount: float) -> str:
     return f"${amount:.2f}"
 
 
-def yn_keyboard() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup([["Yes", "No"]], resize_keyboard=True, one_time_keyboard=True)
+def yn_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ Yes", callback_data="shared_yes"),
+            InlineKeyboardButton("❌ No",  callback_data="shared_no"),
+        ]
+    ])
+
+
+def split_type_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("⚖️  Equal",      callback_data="split_equal")],
+        [InlineKeyboardButton("🧮  Individual", callback_data="split_individual")],
+    ])
 
 
 def progress(data: dict) -> str:
@@ -116,7 +127,7 @@ def push_history(context: ContextTypes.DEFAULT_TYPE, state: int) -> None:
 
 def _re_prompt(state: int, data: dict) -> str:
     prompts = {
-        CHOICE:         "How do you want to split the bill? Tap Equal or Individual.",
+        CHOICE:         "How do you want to split the bill?",
         TOTAL:          "Enter the total bill amount:",
         PEOPLE_EQUAL:   "How many people are splitting the bill?",
         PEOPLE_INDIV:   "How many people are splitting the bill?",
@@ -125,7 +136,7 @@ def _re_prompt(state: int, data: dict) -> str:
         ITEM_NAME:      f"What's the name of {data.get('current_name', '?')}'s item {data.get('current_item', '?')}?",
         ITEM_AMOUNT:    f"Enter the amount for {data.get('current_item_name', 'the item')}:",
         REVIEW_PERSON:  "Review items above. Reply done / edit N / remove N.",
-        SHARED_CONFIRM: "Do you have any shared items to add? Tap Yes or No.",
+        SHARED_CONFIRM: "Do you have any shared items to add?",
         SHARED_NAME_AMT:"Enter the shared item as: Name, amount",
         SHARED_PEOPLE:  "Who shares this item? Enter names separated by commas.",
         GST:            "Enter GST percentage (e.g. 9), or 0 for none.",
@@ -238,46 +249,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
-# ─────────────────────────────────────────────────────────
-# Inline button handler
-# ─────────────────────────────────────────────────────────
-
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await query.answer()
-
-    if query.data == "cmd_split":
-        # Fix: go straight into the split flow as a conversation entry point
-        context.user_data.clear()
-        keyboard = ReplyKeyboardMarkup(
-            [["⚖️ Equal", "🧮 Individual"]],
-            resize_keyboard=True,
-            one_time_keyboard=True,
-        )
-        await query.message.reply_text(
-            "How do you want to split the bill?", reply_markup=keyboard
-        )
-        return CHOICE
-
-    elif query.data == "cmd_help":
-        await query.message.reply_text(
-            "💡 *How Keke works*\n\n"
-            "*Equal split* — enter the final receipt total and number of people. "
-            "Everyone pays the same amount.\n\n"
-            "*Individual split* — enter each person's name and their items (name + price). "
-            "Optionally add shared items split among specific people, then set GST and service charge.\n\n"
-            "At any prompt:\n"
-            "  /undo — go back one step\n"
-            "  /restart — start over\n"
-            "  /cancel — quit",
-            parse_mode="Markdown",
-        )
-        return ConversationHandler.END
-
-    return ConversationHandler.END
-
-
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("➗  Split a bill", callback_data="cmd_split")],
+    ])
     await update.message.reply_text(
         "💡 *How Keke works*\n\n"
         "*Equal split* — enter the final receipt total and number of people. "
@@ -289,6 +264,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "  /restart — start over\n"
         "  /cancel — quit",
         parse_mode="Markdown",
+        reply_markup=keyboard,
     )
 
 
@@ -300,43 +276,86 @@ async def restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 # ─────────────────────────────────────────────────────────
-# Conversation entry
+# Button handler (outside conversation: cmd_help)
+# ─────────────────────────────────────────────────────────
+
+async def button_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("➗  Split a bill", callback_data="cmd_split")],
+    ])
+    await query.message.reply_text(
+        "💡 *How Keke works*\n\n"
+        "*Equal split* — enter the final receipt total and number of people. "
+        "Everyone pays the same amount.\n\n"
+        "*Individual split* — enter each person's name and their items (name + price). "
+        "Optionally add shared items split among specific people, then set GST and service charge.\n\n"
+        "At any prompt:\n"
+        "  /undo — go back one step\n"
+        "  /restart — start over\n"
+        "  /cancel — quit",
+        parse_mode="Markdown",
+        reply_markup=keyboard,
+    )
+
+
+# ─────────────────────────────────────────────────────────
+# Conversation entry points
 # ─────────────────────────────────────────────────────────
 
 async def split_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Entry via /split command."""
     context.user_data.clear()
-    keyboard = ReplyKeyboardMarkup([["⚖️ Equal", "🧮 Individual"]],
-                                   resize_keyboard=True, one_time_keyboard=True)
-    await update.message.reply_text("How do you want to split the bill?", reply_markup=keyboard)
+    await update.message.reply_text(
+        "How do you want to split the bill?",
+        reply_markup=split_type_keyboard(),
+    )
     return CHOICE
 
 
-async def choose_split_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    choice = update.message.text.strip().lower()
+async def split_start_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Entry via inline 'Split a bill' button."""
+    query = update.callback_query
+    await query.answer()
+    context.user_data.clear()
+    await query.message.reply_text(
+        "How do you want to split the bill?",
+        reply_markup=split_type_keyboard(),
+    )
+    return CHOICE
 
-    if "equal" in choice:
+
+# ─────────────────────────────────────────────────────────
+# Choose split type (inline buttons)
+# ─────────────────────────────────────────────────────────
+
+async def choose_split_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    choice = query.data  # "split_equal" or "split_individual"
+
+    if choice == "split_equal":
         push_history(context, CHOICE)
         context.user_data["split_type"] = "equal"
-        await update.message.reply_text(
+        await query.message.reply_text(
             "⚖️ Equal split selected.\n\nEnter the total bill amount (the final number on the receipt):",
-            reply_markup=ReplyKeyboardRemove(),
         )
         return TOTAL
 
-    if "individual" in choice:
+    if choice == "split_individual":
         push_history(context, CHOICE)
         context.user_data["split_type"]           = "individual"
         context.user_data["names"]                = []
         context.user_data["amounts_by_person"]    = {}
         context.user_data["shared_items"]         = []
         context.user_data["current_person_index"] = 0
-        await update.message.reply_text(
+        await query.message.reply_text(
             "🧮 Individual split selected.\n\nHow many people are splitting the bill?",
-            reply_markup=ReplyKeyboardRemove(),
         )
         return PEOPLE_INDIV
 
-    await update.message.reply_text("Please tap ⚖️ Equal or 🧮 Individual.")
+    await query.message.reply_text("Please tap ⚖️ Equal or 🧮 Individual.")
     return CHOICE
 
 
@@ -569,18 +588,18 @@ async def _advance_to_next_person_or_shared(update: Update, context: ContextType
 # ─────────────────────────────────────────────────────────
 
 async def shared_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    choice = update.message.text.strip().lower()
+    query = update.callback_query
+    await query.answer()
     push_history(context, SHARED_CONFIRM)
 
-    if "yes" in choice:
-        await update.message.reply_text(
+    if query.data == "shared_yes":
+        await query.message.reply_text(
             "Enter the shared item as:\nName, amount  (e.g. Wine, 45.00)",
-            reply_markup=ReplyKeyboardRemove(),
         )
         return SHARED_NAME_AMT
 
-    await update.message.reply_text("No shared items. Moving on…", reply_markup=ReplyKeyboardRemove())
-    await update.message.reply_text("Enter GST percentage (e.g. 9), or 0 for none.")
+    await query.message.reply_text("No shared items. Moving on…")
+    await query.message.reply_text("Enter GST percentage (e.g. 9), or 0 for none.")
     return GST
 
 
@@ -672,8 +691,7 @@ async def get_service(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.clear()
-    await update.message.reply_text("❌ Cancelled. Send /split to start again.",
-                                    reply_markup=ReplyKeyboardRemove())
+    await update.message.reply_text("❌ Cancelled. Send /split to start again.")
     return ConversationHandler.END
 
 
@@ -707,11 +725,12 @@ def build_application() -> Application:
     conv = ConversationHandler(
         entry_points=[
             CommandHandler("split", split_start),
-            # "Split a bill" button is also a valid entry point
-            CallbackQueryHandler(button_handler, pattern="^cmd_split$"),
+            CallbackQueryHandler(split_start_button, pattern="^cmd_split$"),
         ],
         states={
-            CHOICE:         [MessageHandler(filters.TEXT & ~filters.COMMAND, choose_split_type)],
+            CHOICE: [
+                CallbackQueryHandler(choose_split_type, pattern="^split_(equal|individual)$"),
+            ],
             TOTAL:          [MessageHandler(filters.TEXT & ~filters.COMMAND, get_total)],
             PEOPLE_EQUAL:   [MessageHandler(filters.TEXT & ~filters.COMMAND, get_people_equal)],
             PEOPLE_INDIV:   [MessageHandler(filters.TEXT & ~filters.COMMAND, get_people_individual)],
@@ -721,7 +740,9 @@ def build_application() -> Application:
             ITEM_AMOUNT:    [MessageHandler(filters.TEXT & ~filters.COMMAND, get_individual_amount)],
             REVIEW_PERSON:  [MessageHandler(filters.TEXT & ~filters.COMMAND, review_person)],
             EDIT_PRICE:     [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_price)],
-            SHARED_CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, shared_confirm)],
+            SHARED_CONFIRM: [
+                CallbackQueryHandler(shared_confirm, pattern="^shared_(yes|no)$"),
+            ],
             SHARED_NAME_AMT:[MessageHandler(filters.TEXT & ~filters.COMMAND, shared_name_amt)],
             SHARED_PEOPLE:  [MessageHandler(filters.TEXT & ~filters.COMMAND, shared_people)],
             GST:            [MessageHandler(filters.TEXT & ~filters.COMMAND, get_gst)],
@@ -737,8 +758,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("start",   start))
     app.add_handler(CommandHandler("help",    help_cmd))
     app.add_handler(CommandHandler("restart", restart))
-    # "How it works" button handled outside the conversation
-    app.add_handler(CallbackQueryHandler(button_handler, pattern="^cmd_help$"))
+    app.add_handler(CallbackQueryHandler(button_help, pattern="^cmd_help$"))
     app.add_handler(MessageHandler(filters.ALL, log_message), group=-1)
     app.add_handler(conv)
     return app
