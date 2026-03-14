@@ -102,6 +102,14 @@ def split_type_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
+def done_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("➗  Split another bill", callback_data="cmd_split")],
+        [InlineKeyboardButton("🌐  Visit keonshu.com",  url="https://keonshu.com")],
+        [InlineKeyboardButton("👋  That's all for now!", callback_data="done_bye")],
+    ])
+
+
 def review_keyboard(items: list) -> InlineKeyboardMarkup:
     rows = []
     for i, (iname, iamt) in enumerate(items):
@@ -334,6 +342,17 @@ async def restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 # ─────────────────────────────────────────────────────────
+# Done / farewell
+# ─────────────────────────────────────────────────────────
+
+async def done_bye(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    await query.message.reply_sticker(STICKER_ID)
+    await query.message.reply_text("See you next time! 👋")
+
+
+# ─────────────────────────────────────────────────────────
 # Conversation entry points
 # ─────────────────────────────────────────────────────────
 
@@ -417,7 +436,10 @@ async def get_people_equal(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     push_history(context, PEOPLE_EQUAL)
     context.user_data["people"] = people
     await update.message.reply_text(build_summary(context.user_data))
-    await update.message.reply_text("📋 Copy the summary above and share it with your group!")
+    await update.message.reply_text(
+        "📋 Copy the summary above and share it with your group!\n\nWhat would you like to do next?",
+        reply_markup=done_keyboard(),
+    )
     return ConversationHandler.END
 
 
@@ -748,7 +770,10 @@ async def get_service(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     push_history(context, SERVICE)
     context.user_data["service"] = v
     await update.message.reply_text(build_summary(context.user_data))
-    await update.message.reply_text("📋 Copy the summary above and share it with your group!")
+    await update.message.reply_text(
+        "📋 Copy the summary above and share it with your group!\n\nWhat would you like to do next?",
+        reply_markup=done_keyboard(),
+    )
     return ConversationHandler.END
 
 
@@ -829,7 +854,8 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("start",   start))
     app.add_handler(CommandHandler("help",    help_cmd))
     app.add_handler(CommandHandler("restart", restart))
-    app.add_handler(CallbackQueryHandler(button_help, pattern="^cmd_help$"))
+    app.add_handler(CallbackQueryHandler(button_help,  pattern="^cmd_help$"))
+    app.add_handler(CallbackQueryHandler(done_bye,     pattern="^done_bye$"))
     app.add_handler(MessageHandler(filters.ALL, log_message), group=-1)
     app.add_handler(conv)
     return app
