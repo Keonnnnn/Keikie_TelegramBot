@@ -96,12 +96,22 @@ def fmt(amount: float) -> str:
     return f"${amount:.2f}"
 
 
+def action_bar() -> list:
+    """Bottom row with Back / Restart / Exit — appended to any keyboard."""
+    return [[
+        InlineKeyboardButton("⬅️ Back",    callback_data="action_back"),
+        InlineKeyboardButton("🔄 Restart", callback_data="action_restart"),
+        InlineKeyboardButton("✖️ Exit",    callback_data="action_exit"),
+    ]]
+
+
 def yn_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("✅ Yes", callback_data="shared_yes"),
             InlineKeyboardButton("❌ No",  callback_data="shared_no"),
-        ]
+        ],
+        *action_bar(),
     ])
 
 
@@ -109,6 +119,7 @@ def split_type_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("⚖️  Equal",      callback_data="split_equal")],
         [InlineKeyboardButton("🧮  Individual", callback_data="split_individual")],
+        *action_bar(),
     ])
 
 
@@ -132,13 +143,15 @@ def tax_keyboard(selected: list) -> InlineKeyboardMarkup:
         rows.append([InlineKeyboardButton("✅  Confirm", callback_data="tax_confirm")])
     else:
         rows.append([InlineKeyboardButton("— Select taxes or choose No taxes —", callback_data="tax_noop")])
+    rows += action_bar()
     return InlineKeyboardMarkup(rows)
 
 
 def country_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(f"🇸🇬  Singapore  (GST {SG_GST:.0f}%, Service {SG_SERVICE:.0f}%)", callback_data="country_sg")],
-        [InlineKeyboardButton("🌍  Other countries",                                              callback_data="country_other")],
+        [InlineKeyboardButton("🌍  Other countries", callback_data="country_other")],
+        *action_bar(),
     ])
 
 
@@ -150,6 +163,7 @@ def review_keyboard(items: list) -> InlineKeyboardMarkup:
             InlineKeyboardButton(f"🗑️ {iname}", callback_data=f"review_remove_{i}"),
         ])
     rows.append([InlineKeyboardButton("✅  Confirm & continue", callback_data="review_done")])
+    rows += action_bar()
     return InlineKeyboardMarkup(rows)
 
 
@@ -164,6 +178,7 @@ def sharers_keyboard(names: list, selected: list) -> InlineKeyboardMarkup:
         rows.append([InlineKeyboardButton("✅  Confirm", callback_data="sharer_confirm")])
     else:
         rows.append([InlineKeyboardButton("— Select at least one person —", callback_data="sharer_noop")])
+    rows += action_bar()
     return InlineKeyboardMarkup(rows)
 
 
@@ -171,6 +186,11 @@ def progress(data: dict) -> str:
     idx   = data.get("current_person_index", 0)
     total = data.get("people", 0)
     return f"[{idx + 1}/{total}] " if total else ""
+
+
+def _action_bar_hint() -> str:
+    """Small reminder shown under text-input prompts."""
+    return "\n\n_Use the buttons below to go back, restart, or exit._"
 
 
 # ─────────────────────────────────────────────────────────
@@ -188,6 +208,83 @@ async def log_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         print(f"  👆 Copy that into STICKER_ID at the top of bot_app.py")
     elif update.message.text:
         print(f"[{name}]: {update.message.text}")
+
+
+# ─────────────────────────────────────────────────────────
+# Persistent action-bar keyboard (for text-input steps)
+# Shown as a separate message so users always have buttons
+# ─────────────────────────────────────────────────────────
+
+ACTION_BAR_MARKUP = InlineKeyboardMarkup(action_bar())
+
+
+async def _send_action_bar(message_obj) -> None:
+    """Send a standalone action bar below a text-input prompt."""
+    await message_obj.reply_text(
+        "⬅️ Back  •  🔄 Restart  •  ✖️ Exit",
+        reply_markup=ACTION_BAR_MARKUP,
+    )
+
+
+# ─────────────────────────────────────────────────────────
+# Action bar handler (Back / Restart / Exit)
+# ─────────────────────────────────────────────────────────
+
+async def handle_action_bar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "action_restart":
+        context.user_data.clear()
+        await query.message.reply_text(
+            "🔄 Restarted! How do you want to split the bill?",
+            reply_markup=split_type_keyboard(),
+        )
+        return CHOICE
+
+    if query.data == "action_exit":
+        context.user_data.clear()
+        await query.message.reply_text("✖️ Session ended. Send /split to start again.")
+        return ConversationHandler.END
+
+    if query.data == "action_back":
+        history: list = context.user_data.get("_history", [])
+        if not history:
+            await query.answer("Nothing to go back to!", show_alert=True)
+            return ConversationHandler.END
+
+        prev_state, snapshot = history.pop()
+        for k in [k for k in context.user_data if k != "_history"]:
+            del context.user_data[k]
+        context.user_data.update(snapshot)
+
+        label = STATE_LABELS.get(prev_state, "previous step")
+        await query.message.reply_text(
+            f"⬅️ Back to: *{label}*\n\n{_re_prompt(prev_state, context.user_data)}",
+            parse_mode="Markdown",
+            reply_markup=_state_keyboard(prev_state, context.user_data),
+        )
+        return prev_state
+
+    return ConversationHandler.END
+
+
+def _state_keyboard(state: int, data: dict):
+    """Return the right keyboard for a given state (used after Back)."""
+    if state == CHOICE:
+        return split_type_keyboard()
+    if state in (SHARED_CONFIRM,):
+        return yn_keyboard()
+    if state == TAX_CONFIRM:
+        return tax_keyboard(data.get("pending_taxes", []))
+    if state == COUNTRY_SELECT:
+        return country_keyboard()
+    if state == REVIEW_PERSON:
+        name  = data.get("current_name", "")
+        items = data.get("amounts_by_person", {}).get(name, [])
+        return review_keyboard(items)
+    # Text-input states: show standalone action bar
+    return ACTION_BAR_MARKUP
 
 
 # ─────────────────────────────────────────────────────────
@@ -218,28 +315,10 @@ def _re_prompt(state: int, data: dict) -> str:
         SHARED_PEOPLE:   "Select who shares this item.",
         TAX_CONFIRM:     "Select which taxes apply to this bill.",
         COUNTRY_SELECT:  "Select your country.",
-        MANUAL_GST:      "Enter the GST / tax percentage (e.g. 9), or 0 for none.",
+        MANUAL_GST:      "Enter the tax percentage (e.g. 9), or 0 for none.",
         MANUAL_SERVICE:  "Enter the service charge percentage (e.g. 10), or 0 for none.",
     }
     return prompts.get(state, "Please continue.")
-
-
-async def undo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    history: list = context.user_data.get("_history", [])
-    if not history:
-        await update.message.reply_text("Nothing to undo yet.")
-        return ConversationHandler.END
-
-    prev_state, snapshot = history.pop()
-    for k in [k for k in context.user_data if k != "_history"]:
-        del context.user_data[k]
-    context.user_data.update(snapshot)
-
-    label = STATE_LABELS.get(prev_state, "previous step")
-    await update.message.reply_text(
-        f"Undone! Back to: {label}\n\n" + _re_prompt(prev_state, context.user_data),
-    )
-    return prev_state
 
 
 # ─────────────────────────────────────────────────────────
@@ -345,10 +424,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Everyone pays the same amount.\n\n"
         "*Individual split* — enter each person's name and their items (name + price). "
         "Optionally add shared items split among specific people, then choose your taxes.\n\n"
-        "At any prompt:\n"
-        "  /undo — go back one step\n"
-        "  /restart — start over\n"
-        "  /cancel — quit",
+        "At each step you'll see *Back*, *Restart*, and *Exit* buttons to navigate freely.",
         parse_mode="Markdown",
         reply_markup=keyboard,
     )
@@ -366,10 +442,7 @@ async def button_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         "Everyone pays the same amount.\n\n"
         "*Individual split* — enter each person's name and their items (name + price). "
         "Optionally add shared items split among specific people, then choose your taxes.\n\n"
-        "At any prompt:\n"
-        "  /undo — go back one step\n"
-        "  /restart — start over\n"
-        "  /cancel — quit",
+        "At each step you'll see *Back*, *Restart*, and *Exit* buttons to navigate freely.",
         parse_mode="Markdown",
         reply_markup=keyboard,
     )
@@ -429,6 +502,7 @@ async def choose_split_type(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         context.user_data["split_type"] = "equal"
         await query.message.reply_text(
             "⚖️ Equal split selected.\n\nEnter the total bill amount (the final number on the receipt):",
+            reply_markup=ACTION_BAR_MARKUP,
         )
         return TOTAL
 
@@ -441,6 +515,7 @@ async def choose_split_type(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         context.user_data["current_person_index"] = 0
         await query.message.reply_text(
             "🧮 Individual split selected.\n\nHow many people are splitting the bill?",
+            reply_markup=ACTION_BAR_MARKUP,
         )
         return PEOPLE_INDIV
 
@@ -457,11 +532,17 @@ async def get_total(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         if total <= 0:
             raise ValueError
     except ValueError:
-        await update.message.reply_text("⚠️ Please enter a valid positive number (e.g. 45.80).")
+        await update.message.reply_text(
+            "⚠️ Please enter a valid positive number (e.g. 45.80).",
+            reply_markup=ACTION_BAR_MARKUP,
+        )
         return TOTAL
     push_history(context, TOTAL)
     context.user_data["total"] = total
-    await update.message.reply_text("How many people are splitting the bill?")
+    await update.message.reply_text(
+        "How many people are splitting the bill?",
+        reply_markup=ACTION_BAR_MARKUP,
+    )
     return PEOPLE_EQUAL
 
 
@@ -471,7 +552,10 @@ async def get_people_equal(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         if people <= 0:
             raise ValueError
     except ValueError:
-        await update.message.reply_text("⚠️ Please enter a whole number greater than 0.")
+        await update.message.reply_text(
+            "⚠️ Please enter a whole number greater than 0.",
+            reply_markup=ACTION_BAR_MARKUP,
+        )
         return PEOPLE_EQUAL
     push_history(context, PEOPLE_EQUAL)
     context.user_data["people"] = people
@@ -493,25 +577,36 @@ async def get_people_individual(update: Update, context: ContextTypes.DEFAULT_TY
         if people <= 0:
             raise ValueError
     except ValueError:
-        await update.message.reply_text("⚠️ Please enter a whole number greater than 0.")
+        await update.message.reply_text(
+            "⚠️ Please enter a whole number greater than 0.",
+            reply_markup=ACTION_BAR_MARKUP,
+        )
         return PEOPLE_INDIV
     push_history(context, PEOPLE_INDIV)
     context.user_data["people"] = people
-    await update.message.reply_text(f"{progress(context.user_data)}What's the name of Person 1?")
+    await update.message.reply_text(
+        f"{progress(context.user_data)}What's the name of Person 1?",
+        reply_markup=ACTION_BAR_MARKUP,
+    )
     return NAME_INDIV
 
 
 async def get_name_individual(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     name = update.message.text.strip()
     if not name:
-        await update.message.reply_text("⚠️ Please enter a valid name.")
+        await update.message.reply_text(
+            "⚠️ Please enter a valid name.",
+            reply_markup=ACTION_BAR_MARKUP,
+        )
         return NAME_INDIV
     push_history(context, NAME_INDIV)
     context.user_data["names"].append(name)
     context.user_data["amounts_by_person"][name] = []
     context.user_data["current_name"] = name
     await update.message.reply_text(
-        f"{progress(context.user_data)}How many items did {name} order?")
+        f"{progress(context.user_data)}How many items did {name} order?",
+        reply_markup=ACTION_BAR_MARKUP,
+    )
     return ITEM_COUNT
 
 
@@ -525,7 +620,10 @@ async def get_item_count(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if count <= 0:
             raise ValueError
     except ValueError:
-        await update.message.reply_text("⚠️ Please enter a number of items (at least 1).")
+        await update.message.reply_text(
+            "⚠️ Please enter a number of items (at least 1).",
+            reply_markup=ACTION_BAR_MARKUP,
+        )
         return ITEM_COUNT
     push_history(context, ITEM_COUNT)
     context.user_data["item_count"]   = count
@@ -533,7 +631,9 @@ async def get_item_count(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     name = context.user_data["current_name"]
     await update.message.reply_text(
         f"{progress(context.user_data)}Item 1/{count} for {name} — what's it called?\n"
-        f"(type - to skip naming it)")
+        f"(type - to skip naming it)",
+        reply_markup=ACTION_BAR_MARKUP,
+    )
     return ITEM_NAME
 
 
@@ -547,7 +647,9 @@ async def get_item_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     item_count = context.user_data["item_count"]
     await update.message.reply_text(
         f"{progress(context.user_data)}How much did {item_label} cost? "
-        f"({name}'s item {item_num}/{item_count})")
+        f"({name}'s item {item_num}/{item_count})",
+        reply_markup=ACTION_BAR_MARKUP,
+    )
     return ITEM_AMOUNT
 
 
@@ -557,7 +659,10 @@ async def get_individual_amount(update: Update, context: ContextTypes.DEFAULT_TY
         if amount < 0:
             raise ValueError
     except ValueError:
-        await update.message.reply_text("⚠️ Please enter a valid amount (e.g. 13.95).")
+        await update.message.reply_text(
+            "⚠️ Please enter a valid amount (e.g. 13.95).",
+            reply_markup=ACTION_BAR_MARKUP,
+        )
         return ITEM_AMOUNT
 
     push_history(context, ITEM_AMOUNT)
@@ -572,7 +677,9 @@ async def get_individual_amount(update: Update, context: ContextTypes.DEFAULT_TY
         context.user_data["current_item"] = next_item
         await update.message.reply_text(
             f"{progress(context.user_data)}Item {next_item}/{item_count} for {name} — what's it called?\n"
-            f"(type - to skip)")
+            f"(type - to skip)",
+            reply_markup=ACTION_BAR_MARKUP,
+        )
         return ITEM_NAME
 
     return await _show_person_review(update, context, name)
@@ -623,6 +730,7 @@ async def review_person(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             await query.message.reply_text(
                 f"Current price of *{iname}* is {fmt(iamt)}.\nEnter the new price:",
                 parse_mode="Markdown",
+                reply_markup=ACTION_BAR_MARKUP,
             )
             return EDIT_PRICE
 
@@ -644,7 +752,9 @@ async def review_person(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             else:
                 await query.edit_message_text(f"All items removed for {name}.")
                 await query.message.reply_text(
-                    f"No items left for {name}. How many items did they order?")
+                    f"No items left for {name}. How many items did they order?",
+                    reply_markup=ACTION_BAR_MARKUP,
+                )
                 return ITEM_COUNT
 
     return REVIEW_PERSON
@@ -659,7 +769,10 @@ async def edit_price(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         if new_price < 0:
             raise ValueError
     except ValueError:
-        await update.message.reply_text("⚠️ Please enter a valid price (e.g. 12.50).")
+        await update.message.reply_text(
+            "⚠️ Please enter a valid price (e.g. 12.50).",
+            reply_markup=ACTION_BAR_MARKUP,
+        )
         return EDIT_PRICE
 
     old_name, old_price = items[idx]
@@ -677,7 +790,10 @@ async def _advance_to_next_person_or_shared(query, context: ContextTypes.DEFAULT
     reply = query.message.reply_text
 
     if next_index < context.user_data["people"]:
-        await reply(f"{progress(context.user_data)}What's the name of Person {next_index + 1}?")
+        await reply(
+            f"{progress(context.user_data)}What's the name of Person {next_index + 1}?",
+            reply_markup=ACTION_BAR_MARKUP,
+        )
         return NAME_INDIV
 
     await reply(
@@ -700,6 +816,7 @@ async def shared_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if query.data == "shared_yes":
         await query.message.reply_text(
             "Enter the shared item as:\nName, amount  (e.g. Wine, 45.00)",
+            reply_markup=ACTION_BAR_MARKUP,
         )
         return SHARED_NAME_AMT
 
@@ -718,7 +835,9 @@ async def shared_name_amt(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             raise ValueError
     except ValueError:
         await update.message.reply_text(
-            "⚠️ Use the format: Name, amount  (e.g. Wine, 45.00)")
+            "⚠️ Use the format: Name, amount  (e.g. Wine, 45.00)",
+            reply_markup=ACTION_BAR_MARKUP,
+        )
         return SHARED_NAME_AMT
 
     push_history(context, SHARED_NAME_AMT)
@@ -845,7 +964,7 @@ async def tax_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         context.user_data["need_service"] = "service" in selected
         context.user_data.pop("pending_taxes", None)
 
-        await query.edit_message_text("Which country are you dining in?")
+        await query.edit_message_text("Which country are you in?")
         await query.message.reply_text(
             "🌏 Select your country:",
             reply_markup=country_keyboard(),
@@ -866,7 +985,6 @@ async def country_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     need_gst     = context.user_data.get("need_gst",     False)
     need_service = context.user_data.get("need_service", False)
 
-    # ── Singapore: fixed rates ──────────────────────────
     if query.data == "country_sg":
         push_history(context, COUNTRY_SELECT)
         context.user_data["country"]   = "Singapore"
@@ -890,7 +1008,6 @@ async def country_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
         return ConversationHandler.END
 
-    # ── Other countries: manual entry ───────────────────
     if query.data == "country_other":
         push_history(context, COUNTRY_SELECT)
         context.user_data["country"] = "Other"
@@ -898,22 +1015,20 @@ async def country_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
         if need_gst:
             await query.message.reply_text(
-                "Enter the tax percentage (GST / VAT / SST / etc.) for your country, or 0 for none.\n"
-                "e.g. 10"
+                "Enter the tax percentage (GST / VAT / SST / etc.) for your country, or 0 for none.\ne.g. 10",
+                reply_markup=ACTION_BAR_MARKUP,
             )
             return MANUAL_GST
         else:
-            # No GST needed, check service
             context.user_data["gst"]       = 0.0
             context.user_data["gst_label"] = "GST"
             if need_service:
                 await query.message.reply_text(
-                    "Enter the service charge percentage for your country, or 0 for none.\n"
-                    "e.g. 10"
+                    "Enter the service charge percentage for your country, or 0 for none.\ne.g. 10",
+                    reply_markup=ACTION_BAR_MARKUP,
                 )
                 return MANUAL_SERVICE
             else:
-                # Neither — shouldn't normally reach here but handle gracefully
                 context.user_data["service"] = 0.0
                 await query.message.reply_text(build_summary(context.user_data))
                 await query.message.reply_text(
@@ -935,7 +1050,10 @@ async def manual_gst(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         if v < 0:
             raise ValueError
     except ValueError:
-        await update.message.reply_text("⚠️ Enter a valid percentage like 10 or 0.")
+        await update.message.reply_text(
+            "⚠️ Enter a valid percentage like 10 or 0.",
+            reply_markup=ACTION_BAR_MARKUP,
+        )
         return MANUAL_GST
 
     push_history(context, MANUAL_GST)
@@ -944,11 +1062,11 @@ async def manual_gst(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     if context.user_data.get("need_service"):
         await update.message.reply_text(
-            "Enter the service charge percentage, or 0 for none.\ne.g. 10"
+            "Enter the service charge percentage, or 0 for none.\ne.g. 10",
+            reply_markup=ACTION_BAR_MARKUP,
         )
         return MANUAL_SERVICE
 
-    # No service charge needed — finish
     context.user_data["service"] = 0.0
     await update.message.reply_text(build_summary(context.user_data))
     await update.message.reply_text(
@@ -964,7 +1082,10 @@ async def manual_service(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if v < 0:
             raise ValueError
     except ValueError:
-        await update.message.reply_text("⚠️ Enter a valid percentage like 10 or 0.")
+        await update.message.reply_text(
+            "⚠️ Enter a valid percentage like 10 or 0.",
+            reply_markup=ACTION_BAR_MARKUP,
+        )
         return MANUAL_SERVICE
 
     push_history(context, MANUAL_SERVICE)
@@ -978,12 +1099,12 @@ async def manual_service(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 # ─────────────────────────────────────────────────────────
-# Cancel
+# Cancel (command fallback — kept for power users)
 # ─────────────────────────────────────────────────────────
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.clear()
-    await update.message.reply_text("❌ Cancelled. Send /split to start again.")
+    await update.message.reply_text("✖️ Session ended. Send /split to start again.")
     return ConversationHandler.END
 
 
@@ -995,7 +1116,6 @@ async def post_init(application: Application) -> None:
     await application.bot.set_my_commands([
         BotCommand("start",   "Start interacting with Keke"),
         BotCommand("split",   "Start a new bill split"),
-        BotCommand("undo",    "Undo the last step"),
         BotCommand("restart", "Restart from scratch"),
         BotCommand("cancel",  "Quit current session"),
         BotCommand("help",    "How to use Keke"),
@@ -1014,6 +1134,9 @@ def build_application() -> Application:
         .build()
     )
 
+    # Action-bar pattern covers all three buttons across all states
+    ACTION_PATTERN = "^action_(back|restart|exit)$"
+
     conv = ConversationHandler(
         entry_points=[
             CommandHandler("split", split_start),
@@ -1022,41 +1145,79 @@ def build_application() -> Application:
         states={
             CHOICE: [
                 CallbackQueryHandler(choose_split_type, pattern="^split_(equal|individual)$"),
+                CallbackQueryHandler(handle_action_bar, pattern=ACTION_PATTERN),
             ],
-            TOTAL:        [MessageHandler(filters.TEXT & ~filters.COMMAND, get_total)],
-            PEOPLE_EQUAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_people_equal)],
-            PEOPLE_INDIV: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_people_individual)],
-            NAME_INDIV:   [MessageHandler(filters.TEXT & ~filters.COMMAND, get_name_individual)],
-            ITEM_COUNT:   [MessageHandler(filters.TEXT & ~filters.COMMAND, get_item_count)],
-            ITEM_NAME:    [MessageHandler(filters.TEXT & ~filters.COMMAND, get_item_name)],
-            ITEM_AMOUNT:  [MessageHandler(filters.TEXT & ~filters.COMMAND, get_individual_amount)],
+            TOTAL: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, get_total),
+                CallbackQueryHandler(handle_action_bar, pattern=ACTION_PATTERN),
+            ],
+            PEOPLE_EQUAL: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, get_people_equal),
+                CallbackQueryHandler(handle_action_bar, pattern=ACTION_PATTERN),
+            ],
+            PEOPLE_INDIV: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, get_people_individual),
+                CallbackQueryHandler(handle_action_bar, pattern=ACTION_PATTERN),
+            ],
+            NAME_INDIV: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, get_name_individual),
+                CallbackQueryHandler(handle_action_bar, pattern=ACTION_PATTERN),
+            ],
+            ITEM_COUNT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, get_item_count),
+                CallbackQueryHandler(handle_action_bar, pattern=ACTION_PATTERN),
+            ],
+            ITEM_NAME: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, get_item_name),
+                CallbackQueryHandler(handle_action_bar, pattern=ACTION_PATTERN),
+            ],
+            ITEM_AMOUNT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, get_individual_amount),
+                CallbackQueryHandler(handle_action_bar, pattern=ACTION_PATTERN),
+            ],
             REVIEW_PERSON: [
                 CallbackQueryHandler(review_person, pattern="^review_(done|edit_\\d+|remove_\\d+)$"),
+                CallbackQueryHandler(handle_action_bar, pattern=ACTION_PATTERN),
             ],
-            EDIT_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_price)],
+            EDIT_PRICE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, edit_price),
+                CallbackQueryHandler(handle_action_bar, pattern=ACTION_PATTERN),
+            ],
             SHARED_CONFIRM: [
                 CallbackQueryHandler(shared_confirm, pattern="^shared_(yes|no)$"),
+                CallbackQueryHandler(handle_action_bar, pattern=ACTION_PATTERN),
             ],
-            SHARED_NAME_AMT: [MessageHandler(filters.TEXT & ~filters.COMMAND, shared_name_amt)],
+            SHARED_NAME_AMT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, shared_name_amt),
+                CallbackQueryHandler(handle_action_bar, pattern=ACTION_PATTERN),
+            ],
             SHARED_PEOPLE: [
                 CallbackQueryHandler(shared_people, pattern="^(sharer_toggle_.+|sharer_confirm|sharer_noop)$"),
+                CallbackQueryHandler(handle_action_bar, pattern=ACTION_PATTERN),
             ],
             TAX_CONFIRM: [
                 CallbackQueryHandler(
                     tax_confirm,
                     pattern="^(tax_toggle_gst|tax_toggle_service|tax_none|tax_confirm|tax_noop)$"
                 ),
+                CallbackQueryHandler(handle_action_bar, pattern=ACTION_PATTERN),
             ],
             COUNTRY_SELECT: [
                 CallbackQueryHandler(country_select, pattern="^country_(sg|other)$"),
+                CallbackQueryHandler(handle_action_bar, pattern=ACTION_PATTERN),
             ],
-            MANUAL_GST:     [MessageHandler(filters.TEXT & ~filters.COMMAND, manual_gst)],
-            MANUAL_SERVICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, manual_service)],
+            MANUAL_GST: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, manual_gst),
+                CallbackQueryHandler(handle_action_bar, pattern=ACTION_PATTERN),
+            ],
+            MANUAL_SERVICE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, manual_service),
+                CallbackQueryHandler(handle_action_bar, pattern=ACTION_PATTERN),
+            ],
         },
         fallbacks=[
             CommandHandler("cancel",  cancel),
             CommandHandler("restart", restart),
-            CommandHandler("undo",    undo),
         ],
     )
 
