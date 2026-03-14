@@ -1,7 +1,3 @@
-"""
-Keke Bill Splitter Bot — bot_app.py
-"""
-
 import os
 import copy
 import logging
