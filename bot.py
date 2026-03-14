@@ -6,10 +6,18 @@ import os
 import copy
 import logging
 from dotenv import load_dotenv
-from telegram import BotCommand, ReplyKeyboardMarkup, ReplyKeyboardRemove, Update
+from telegram import (
+    BotCommand,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
+    Update,
+)
 from telegram.ext import (
     Application,
     ApplicationBuilder,
+    CallbackQueryHandler,
     CommandHandler,
     ConversationHandler,
     ContextTypes,
@@ -216,27 +224,67 @@ def build_summary(data: dict) -> str:
 # ─────────────────────────────────────────────────────────
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("➗  Split a bill", callback_data="cmd_split")],
+        [InlineKeyboardButton("💡  How it works", callback_data="cmd_help")],
+    ])
     await update.message.reply_text(
-        "👋 Hi! I'm Keke, your bill-splitting assistant.\n\n"
-        "Commands:\n"
-        "  /split — start a new split\n"
-        "  /undo — undo the last step\n"
-        "  /restart — restart from scratch\n"
-        "  /cancel — quit\n"
-        "  /help — how to use me"
+        "👋 Hi! I'm *Keke*, your bill-splitting assistant!\n\n"
+        "I help you split restaurant bills fairly — equally or by individual orders, "
+        "with shared items, GST, and service charge all handled for you. 🧾\n\n"
+        "What would you like to do?",
+        parse_mode="Markdown",
+        reply_markup=keyboard,
     )
+
+
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "cmd_split":
+        await query.message.reply_text(
+            "Let's go! Tap below or send /split to begin. 🍽️",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("➗  Start splitting", callback_data="cmd_split_start")],
+            ]),
+        )
+    elif query.data == "cmd_split_start":
+        context.user_data.clear()
+        keyboard = ReplyKeyboardMarkup(
+            [["⚖️ Equal", "🧮 Individual"]],
+            resize_keyboard=True,
+            one_time_keyboard=True,
+        )
+        await query.message.reply_text(
+            "How do you want to split the bill?", reply_markup=keyboard
+        )
+    elif query.data == "cmd_help":
+        await query.message.reply_text(
+            "💡 *How Keke works*\n\n"
+            "*Equal split* — enter the final receipt total and number of people. "
+            "Everyone pays the same amount.\n\n"
+            "*Individual split* — enter each person's name and their items \\(name \\+ price\\). "
+            "Optionally add shared items split among specific people, then set GST and service charge\\.\n\n"
+            "At any prompt:\n"
+            "  /undo — go back one step\n"
+            "  /restart — start over\n"
+            "  /cancel — quit",
+            parse_mode="MarkdownV2",
+        )
 
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
-        "💡 How Keke works\n\n"
-        "Equal split — enter the final receipt total and number of people.\n\n"
-        "Individual split — enter each person's name and their items (name + price). "
-        "Optionally add shared items split among specific people, then set GST and service charge.\n\n"
+        "💡 *How Keke works*\n\n"
+        "Equal split — enter the final receipt total and number of people\\.\n\n"
+        "Individual split — enter each person's name and their items \\(name \\+ price\\)\\. "
+        "Optionally add shared items split among specific people, then set GST and service charge\\.\n\n"
         "At any prompt:\n"
         "  /undo — go back one step\n"
         "  /restart — start over\n"
-        "  /cancel — quit"
+        "  /cancel — quit",
+        parse_mode="MarkdownV2",
     )
 
 
@@ -681,6 +729,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("start",   start))
     app.add_handler(CommandHandler("help",    help_cmd))
     app.add_handler(CommandHandler("restart", restart))
+    app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.ALL, log_message), group=-1)
     app.add_handler(conv)
     return app
