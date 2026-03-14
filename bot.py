@@ -97,13 +97,12 @@ def split_type_keyboard() -> InlineKeyboardMarkup:
 
 
 def review_keyboard(items: list) -> InlineKeyboardMarkup:
-    """One row per item with ✏️ edit and 🗑️ remove buttons, plus a confirm row."""
+    """One row per item showing the item name with ✏️ and 🗑️ action buttons."""
     rows = []
     for i, (iname, iamt) in enumerate(items):
         rows.append([
-            InlineKeyboardButton(f"{iname}  —  {fmt(iamt)}", callback_data=f"review_noop"),
-            InlineKeyboardButton("✏️", callback_data=f"review_edit_{i}"),
-            InlineKeyboardButton("🗑️", callback_data=f"review_remove_{i}"),
+            InlineKeyboardButton(f"✏️ {iname}", callback_data=f"review_edit_{i}"),
+            InlineKeyboardButton(f"🗑️ {iname}", callback_data=f"review_remove_{i}"),
         ])
     rows.append([InlineKeyboardButton("✅  Confirm & continue", callback_data="review_done")])
     return InlineKeyboardMarkup(rows)
@@ -498,11 +497,18 @@ async def _show_person_review(update: Update, context: ContextTypes.DEFAULT_TYPE
     items = context.user_data["amounts_by_person"][name]
     person_total = sum(a for _, a in items)
 
-    # Send or edit the review message
-    text = f"📋 *{name}'s items* (subtotal: {fmt(person_total)})\n\nTap ✏️ to edit a price or 🗑️ to remove an item."
-    msg_func = update.message.reply_text if update.message else update.callback_query.message.reply_text
+    lines = [f"📋 *{name}'s items* (subtotal: {fmt(person_total)})", ""]
+    for i, (iname, iamt) in enumerate(items, 1):
+        lines.append(f"  {i}. {iname} — {fmt(iamt)}")
+    lines.append("\nTap ✏️ to edit a price or 🗑️ to remove an item.")
+
+    msg_func = (
+        update.message.reply_text
+        if update.message
+        else update.callback_query.message.reply_text
+    )
     await msg_func(
-        text,
+        "\n".join(lines),
         parse_mode="Markdown",
         reply_markup=review_keyboard(items),
     )
@@ -520,9 +526,6 @@ async def review_person(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         push_history(context, REVIEW_PERSON)
         return await _advance_to_next_person_or_shared(query, context)
 
-    if data == "review_noop":
-        return REVIEW_PERSON
-
     if data.startswith("review_edit_"):
         idx = int(data.split("_")[-1])
         if 0 <= idx < len(items):
@@ -537,12 +540,15 @@ async def review_person(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     if data.startswith("review_remove_"):
         idx = int(data.split("_")[-1])
         if 0 <= idx < len(items):
-            removed_name, removed_amt = items.pop(idx)
+            removed_name, _ = items.pop(idx)
             if items:
-                # Refresh the review message with updated list
                 person_total = sum(a for _, a in items)
+                lines = [f"📋 *{name}'s items* (subtotal: {fmt(person_total)})", ""]
+                for i, (iname, iamt) in enumerate(items, 1):
+                    lines.append(f"  {i}. {iname} — {fmt(iamt)}")
+                lines.append("\nTap ✏️ to edit a price or 🗑️ to remove an item.")
                 await query.edit_message_text(
-                    f"📋 *{name}'s items* (subtotal: {fmt(person_total)})\n\nTap ✏️ to edit a price or 🗑️ to remove an item.",
+                    "\n".join(lines),
                     parse_mode="Markdown",
                     reply_markup=review_keyboard(items),
                 )
@@ -551,7 +557,6 @@ async def review_person(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
                 await query.message.reply_text(
                     f"No items left for {name}. How many items did they order?")
                 return ITEM_COUNT
-        return REVIEW_PERSON
 
     return REVIEW_PERSON
 
@@ -577,12 +582,10 @@ async def edit_price(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return await _show_person_review(update, context, name)
 
 
-async def _advance_to_next_person_or_shared(query_or_update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def _advance_to_next_person_or_shared(query, context: ContextTypes.DEFAULT_TYPE) -> int:
     next_index = context.user_data["current_person_index"] + 1
     context.user_data["current_person_index"] = next_index
-
-    # Support being called from both a callback query and a message update
-    reply = query_or_update.message.reply_text
+    reply = query.message.reply_text
 
     if next_index < context.user_data["people"]:
         await reply(f"{progress(context.user_data)}What's the name of Person {next_index + 1}?")
@@ -752,7 +755,7 @@ def build_application() -> Application:
             ITEM_NAME:    [MessageHandler(filters.TEXT & ~filters.COMMAND, get_item_name)],
             ITEM_AMOUNT:  [MessageHandler(filters.TEXT & ~filters.COMMAND, get_individual_amount)],
             REVIEW_PERSON: [
-                CallbackQueryHandler(review_person, pattern="^review_(done|noop|edit_\\d+|remove_\\d+)$"),
+                CallbackQueryHandler(review_person, pattern="^review_(done|edit_\\d+|remove_\\d+)$"),
             ],
             EDIT_PRICE:     [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_price)],
             SHARED_CONFIRM: [
