@@ -238,18 +238,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+# ─────────────────────────────────────────────────────────
+# Inline button handler
+# ─────────────────────────────────────────────────────────
+
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
 
     if query.data == "cmd_split":
-        await query.message.reply_text(
-            "Let's go! Tap below or send /split to begin. 🍽️",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("➗  Start splitting", callback_data="cmd_split_start")],
-            ]),
-        )
-    elif query.data == "cmd_split_start":
+        # Fix: go straight into the split flow as a conversation entry point
         context.user_data.clear()
         keyboard = ReplyKeyboardMarkup(
             [["⚖️ Equal", "🧮 Individual"]],
@@ -259,32 +257,38 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await query.message.reply_text(
             "How do you want to split the bill?", reply_markup=keyboard
         )
+        return CHOICE
+
     elif query.data == "cmd_help":
         await query.message.reply_text(
             "💡 *How Keke works*\n\n"
             "*Equal split* — enter the final receipt total and number of people. "
             "Everyone pays the same amount.\n\n"
-            "*Individual split* — enter each person's name and their items \\(name \\+ price\\). "
-            "Optionally add shared items split among specific people, then set GST and service charge\\.\n\n"
+            "*Individual split* — enter each person's name and their items (name + price). "
+            "Optionally add shared items split among specific people, then set GST and service charge.\n\n"
             "At any prompt:\n"
             "  /undo — go back one step\n"
             "  /restart — start over\n"
             "  /cancel — quit",
-            parse_mode="MarkdownV2",
+            parse_mode="Markdown",
         )
+        return ConversationHandler.END
+
+    return ConversationHandler.END
 
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "💡 *How Keke works*\n\n"
-        "Equal split — enter the final receipt total and number of people\\.\n\n"
-        "Individual split — enter each person's name and their items \\(name \\+ price\\)\\. "
-        "Optionally add shared items split among specific people, then set GST and service charge\\.\n\n"
+        "*Equal split* — enter the final receipt total and number of people. "
+        "Everyone pays the same amount.\n\n"
+        "*Individual split* — enter each person's name and their items (name + price). "
+        "Optionally add shared items split among specific people, then set GST and service charge.\n\n"
         "At any prompt:\n"
         "  /undo — go back one step\n"
         "  /restart — start over\n"
         "  /cancel — quit",
-        parse_mode="MarkdownV2",
+        parse_mode="Markdown",
     )
 
 
@@ -701,7 +705,11 @@ def build_application() -> Application:
     )
 
     conv = ConversationHandler(
-        entry_points=[CommandHandler("split", split_start)],
+        entry_points=[
+            CommandHandler("split", split_start),
+            # "Split a bill" button is also a valid entry point
+            CallbackQueryHandler(button_handler, pattern="^cmd_split$"),
+        ],
         states={
             CHOICE:         [MessageHandler(filters.TEXT & ~filters.COMMAND, choose_split_type)],
             TOTAL:          [MessageHandler(filters.TEXT & ~filters.COMMAND, get_total)],
@@ -729,7 +737,8 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("start",   start))
     app.add_handler(CommandHandler("help",    help_cmd))
     app.add_handler(CommandHandler("restart", restart))
-    app.add_handler(CallbackQueryHandler(button_handler))
+    # "How it works" button handled outside the conversation
+    app.add_handler(CallbackQueryHandler(button_handler, pattern="^cmd_help$"))
     app.add_handler(MessageHandler(filters.ALL, log_message), group=-1)
     app.add_handler(conv)
     return app
