@@ -37,44 +37,54 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 # ─────────────────────────────────────────────────────────
 STICKER_ID = "CAACAgIAAxkBAAIDA2m1MG5DIROtxbH-hHIhKWtM41kJAAL3AANWnb0KC3IkHUj0DTA6BA"
 
+# ─────────────────────────────────────────────────────────
+# Singapore fixed rates
+# ─────────────────────────────────────────────────────────
+SG_GST     = 9.0
+SG_SERVICE = 10.0
+
 
 # ─────────────────────────────────────────────────────────
 # States
 # ─────────────────────────────────────────────────────────
 (
-    CHOICE,           # 0
-    TOTAL,            # 1
-    PEOPLE_EQUAL,     # 2
-    PEOPLE_INDIV,     # 3
-    NAME_INDIV,       # 4
-    ITEM_COUNT,       # 5
-    ITEM_NAME,        # 6
-    ITEM_AMOUNT,      # 7
-    REVIEW_PERSON,    # 8
-    SHARED_CONFIRM,   # 9
-    SHARED_NAME_AMT,  # 10
-    SHARED_PEOPLE,    # 11
-    GST,              # 12
-    SERVICE,          # 13
-    EDIT_PRICE,       # 14
-) = range(15)
+    CHOICE,             # 0
+    TOTAL,              # 1
+    PEOPLE_EQUAL,       # 2
+    PEOPLE_INDIV,       # 3
+    NAME_INDIV,         # 4
+    ITEM_COUNT,         # 5
+    ITEM_NAME,          # 6
+    ITEM_AMOUNT,        # 7
+    REVIEW_PERSON,      # 8
+    SHARED_CONFIRM,     # 9
+    SHARED_NAME_AMT,    # 10
+    SHARED_PEOPLE,      # 11
+    TAX_CONFIRM,        # 12
+    COUNTRY_SELECT,     # 13
+    MANUAL_GST,         # 14
+    MANUAL_SERVICE,     # 15
+    EDIT_PRICE,         # 16
+) = range(17)
 
 STATE_LABELS = {
-    CHOICE:         "split type",
-    TOTAL:          "total bill amount",
-    PEOPLE_EQUAL:   "number of people",
-    PEOPLE_INDIV:   "number of people",
-    NAME_INDIV:     "person name",
-    ITEM_COUNT:     "item count",
-    ITEM_NAME:      "item name",
-    ITEM_AMOUNT:    "item amount",
-    REVIEW_PERSON:  "item review",
-    SHARED_CONFIRM: "shared items",
-    SHARED_NAME_AMT:"shared item details",
-    SHARED_PEOPLE:  "shared item people",
-    GST:            "GST",
-    SERVICE:        "service charge",
-    EDIT_PRICE:     "edit item price",
+    CHOICE:          "split type",
+    TOTAL:           "total bill amount",
+    PEOPLE_EQUAL:    "number of people",
+    PEOPLE_INDIV:    "number of people",
+    NAME_INDIV:      "person name",
+    ITEM_COUNT:      "item count",
+    ITEM_NAME:       "item name",
+    ITEM_AMOUNT:     "item amount",
+    REVIEW_PERSON:   "item review",
+    SHARED_CONFIRM:  "shared items",
+    SHARED_NAME_AMT: "shared item details",
+    SHARED_PEOPLE:   "shared item people",
+    TAX_CONFIRM:     "tax selection",
+    COUNTRY_SELECT:  "country selection",
+    MANUAL_GST:      "GST percentage",
+    MANUAL_SERVICE:  "service charge percentage",
+    EDIT_PRICE:      "edit item price",
 }
 
 
@@ -104,9 +114,31 @@ def split_type_keyboard() -> InlineKeyboardMarkup:
 
 def done_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("➗  Split another bill", callback_data="cmd_split")],
-        [InlineKeyboardButton("🌐  Visit keonshu.com",  url="https://keonshu.com")],
+        [InlineKeyboardButton("➗  Split another bill",  callback_data="cmd_split")],
+        [InlineKeyboardButton("🌐  Visit keonshu.com",   url="https://keonshu.com")],
         [InlineKeyboardButton("👋  That's all for now!", callback_data="done_bye")],
+    ])
+
+
+def tax_keyboard(selected: list) -> InlineKeyboardMarkup:
+    gst_tick     = "☑️" if "gst"     in selected else "☐"
+    service_tick = "☑️" if "service" in selected else "☐"
+    rows = [
+        [InlineKeyboardButton(f"{gst_tick}  Tax (GST / VAT / SST)",  callback_data="tax_toggle_gst")],
+        [InlineKeyboardButton(f"{service_tick}  Service Charge",      callback_data="tax_toggle_service")],
+        [InlineKeyboardButton("❌  No taxes",                         callback_data="tax_none")],
+    ]
+    if selected:
+        rows.append([InlineKeyboardButton("✅  Confirm", callback_data="tax_confirm")])
+    else:
+        rows.append([InlineKeyboardButton("— Select taxes or choose No taxes —", callback_data="tax_noop")])
+    return InlineKeyboardMarkup(rows)
+
+
+def country_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"🇸🇬  Singapore  (GST {SG_GST:.0f}%, Service {SG_SERVICE:.0f}%)", callback_data="country_sg")],
+        [InlineKeyboardButton("🌍  Other countries",                                              callback_data="country_other")],
     ])
 
 
@@ -150,7 +182,6 @@ async def log_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
     user = update.message.from_user
     name = user.username or user.first_name or "unknown"
-
     if update.message.sticker:
         file_id = update.message.sticker.file_id
         print(f"[{name}] sent a sticker — file_id: {file_id}")
@@ -173,20 +204,22 @@ def push_history(context: ContextTypes.DEFAULT_TYPE, state: int) -> None:
 
 def _re_prompt(state: int, data: dict) -> str:
     prompts = {
-        CHOICE:         "How do you want to split the bill?",
-        TOTAL:          "Enter the total bill amount:",
-        PEOPLE_EQUAL:   "How many people are splitting the bill?",
-        PEOPLE_INDIV:   "How many people are splitting the bill?",
-        NAME_INDIV:     f"{progress(data)}What's the name of Person {data.get('current_person_index', 0) + 1}?",
-        ITEM_COUNT:     f"How many items did {data.get('current_name', '?')} order?",
-        ITEM_NAME:      f"What's the name of {data.get('current_name', '?')}'s item {data.get('current_item', '?')}?",
-        ITEM_AMOUNT:    f"Enter the amount for {data.get('current_item_name', 'the item')}:",
-        REVIEW_PERSON:  "Review your items above.",
-        SHARED_CONFIRM: "Do you have any shared items to add?",
-        SHARED_NAME_AMT:"Enter the shared item as: Name, amount",
-        SHARED_PEOPLE:  "Select who shares this item.",
-        GST:            "Enter GST percentage (e.g. 9), or 0 for none.",
-        SERVICE:        "Enter service charge percentage (e.g. 10), or 0 for none.",
+        CHOICE:          "How do you want to split the bill?",
+        TOTAL:           "Enter the total bill amount:",
+        PEOPLE_EQUAL:    "How many people are splitting the bill?",
+        PEOPLE_INDIV:    "How many people are splitting the bill?",
+        NAME_INDIV:      f"{progress(data)}What's the name of Person {data.get('current_person_index', 0) + 1}?",
+        ITEM_COUNT:      f"How many items did {data.get('current_name', '?')} order?",
+        ITEM_NAME:       f"What's the name of {data.get('current_name', '?')}'s item {data.get('current_item', '?')}?",
+        ITEM_AMOUNT:     f"Enter the amount for {data.get('current_item_name', 'the item')}:",
+        REVIEW_PERSON:   "Review your items above.",
+        SHARED_CONFIRM:  "Do you have any shared items to add?",
+        SHARED_NAME_AMT: "Enter the shared item as: Name, amount",
+        SHARED_PEOPLE:   "Select who shares this item.",
+        TAX_CONFIRM:     "Select which taxes apply to this bill.",
+        COUNTRY_SELECT:  "Select your country.",
+        MANUAL_GST:      "Enter the GST / tax percentage (e.g. 9), or 0 for none.",
+        MANUAL_SERVICE:  "Enter the service charge percentage (e.g. 10), or 0 for none.",
     }
     return prompts.get(state, "Please continue.")
 
@@ -215,8 +248,10 @@ async def undo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 def build_summary(data: dict) -> str:
     lines = ["🧾 BILL SUMMARY", "━━━━━━━━━━━━━━━━━━━━━", ""]
-    gst     = data.get("gst",     0.0)
-    service = data.get("service", 0.0)
+    gst       = data.get("gst",       0.0)
+    service   = data.get("service",   0.0)
+    gst_label = data.get("gst_label", "GST")
+    country   = data.get("country",   None)
 
     if data.get("split_type") == "equal":
         total  = data["total"]
@@ -246,12 +281,16 @@ def build_summary(data: dict) -> str:
         gst_amount     = round(subtotal * gst / 100, 2)
         grand_total    = subtotal + gst_amount
 
+        if country:
+            flag = "🇸🇬" if country == "Singapore" else "🌍"
+            lines.append(f"🌏 Country: {flag} {country}")
         lines += ["📌 Mode: Individual split", f"👥 People: {len(names)}", "",
                   f"  Base total :  {fmt(base_total)}"]
         if service:
-            lines.append(f"  Service ({service:.1f}%) :  {fmt(service_amount)}")
+            lines.append(f"  Service ({service:.1f}%)   :  {fmt(service_amount)}")
         if gst:
-            lines.append(f"  GST ({gst:.1f}%)     :  {fmt(gst_amount)}")
+            padding = "  " if len(gst_label) > 3 else "     "
+            lines.append(f"  {gst_label} ({gst:.1f}%){padding} :  {fmt(gst_amount)}")
         lines += ["  ────────────────────",
                   f"  Grand total :  {fmt(grand_total)}", "",
                   "💰 Per person:"]
@@ -304,7 +343,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "*Equal split* — enter the final receipt total and number of people. "
         "Everyone pays the same amount.\n\n"
         "*Individual split* — enter each person's name and their items (name + price). "
-        "Optionally add shared items split among specific people, then set GST and service charge.\n\n"
+        "Optionally add shared items split among specific people, then choose your taxes.\n\n"
         "At any prompt:\n"
         "  /undo — go back one step\n"
         "  /restart — start over\n"
@@ -325,7 +364,7 @@ async def button_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         "*Equal split* — enter the final receipt total and number of people. "
         "Everyone pays the same amount.\n\n"
         "*Individual split* — enter each person's name and their items (name + price). "
-        "Optionally add shared items split among specific people, then set GST and service charge.\n\n"
+        "Optionally add shared items split among specific people, then choose your taxes.\n\n"
         "At any prompt:\n"
         "  /undo — go back one step\n"
         "  /restart — start over\n"
@@ -664,8 +703,7 @@ async def shared_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return SHARED_NAME_AMT
 
     await query.message.reply_text("No shared items. Moving on…")
-    await query.message.reply_text("Enter GST percentage (e.g. 9), or 0 for none.")
-    return GST
+    return await _ask_tax(query.message)
 
 
 async def shared_name_amt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -742,32 +780,193 @@ async def shared_people(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
 
 # ─────────────────────────────────────────────────────────
-# GST / Service
+# Tax selection
 # ─────────────────────────────────────────────────────────
 
-async def get_gst(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    try:
-        v = float(update.message.text.strip())
-        if v < 0:
-            raise ValueError
-    except ValueError:
-        await update.message.reply_text("⚠️ Enter a valid percentage like 9 or 0.")
-        return GST
-    push_history(context, GST)
-    context.user_data["gst"] = v
-    await update.message.reply_text("Enter service charge percentage (e.g. 10), or 0.")
-    return SERVICE
+async def _ask_tax(message_obj) -> int:
+    await message_obj.reply_text(
+        "Does this bill include any taxes or charges?\nSelect all that apply:",
+        reply_markup=tax_keyboard([]),
+    )
+    return TAX_CONFIRM
 
 
-async def get_service(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def tax_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+
+    selected: list = context.user_data.setdefault("pending_taxes", [])
+    data = query.data
+
+    if data == "tax_noop":
+        return TAX_CONFIRM
+
+    if data == "tax_none":
+        push_history(context, TAX_CONFIRM)
+        context.user_data.pop("pending_taxes", None)
+        context.user_data["gst"]       = 0.0
+        context.user_data["service"]   = 0.0
+        context.user_data["gst_label"] = "GST"
+        context.user_data["country"]   = None
+        await query.edit_message_text("No taxes applied.")
+        await query.message.reply_text(build_summary(context.user_data))
+        await query.message.reply_text(
+            "📋 Copy the summary above and share it with your group!\n\nWhat would you like to do next?",
+            reply_markup=done_keyboard(),
+        )
+        return ConversationHandler.END
+
+    if data == "tax_toggle_gst":
+        if "gst" in selected:
+            selected.remove("gst")
+        else:
+            selected.append("gst")
+        context.user_data["pending_taxes"] = selected
+        await query.edit_message_reply_markup(reply_markup=tax_keyboard(selected))
+        return TAX_CONFIRM
+
+    if data == "tax_toggle_service":
+        if "service" in selected:
+            selected.remove("service")
+        else:
+            selected.append("service")
+        context.user_data["pending_taxes"] = selected
+        await query.edit_message_reply_markup(reply_markup=tax_keyboard(selected))
+        return TAX_CONFIRM
+
+    if data == "tax_confirm":
+        if not selected:
+            await query.answer("Select at least one tax, or choose No taxes.", show_alert=True)
+            return TAX_CONFIRM
+
+        push_history(context, TAX_CONFIRM)
+        context.user_data["need_gst"]     = "gst"     in selected
+        context.user_data["need_service"] = "service" in selected
+        context.user_data.pop("pending_taxes", None)
+
+        await query.edit_message_text("Which country are you dining in?")
+        await query.message.reply_text(
+            "🌏 Select your country:",
+            reply_markup=country_keyboard(),
+        )
+        return COUNTRY_SELECT
+
+    return TAX_CONFIRM
+
+
+# ─────────────────────────────────────────────────────────
+# Country selection
+# ─────────────────────────────────────────────────────────
+
+async def country_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+
+    need_gst     = context.user_data.get("need_gst",     False)
+    need_service = context.user_data.get("need_service", False)
+
+    # ── Singapore: fixed rates ──────────────────────────
+    if query.data == "country_sg":
+        push_history(context, COUNTRY_SELECT)
+        context.user_data["country"]   = "Singapore"
+        context.user_data["gst"]       = SG_GST     if need_gst     else 0.0
+        context.user_data["service"]   = SG_SERVICE if need_service else 0.0
+        context.user_data["gst_label"] = "GST"
+
+        applied = []
+        if need_gst:
+            applied.append(f"GST {SG_GST:.0f}%")
+        if need_service:
+            applied.append(f"Service Charge {SG_SERVICE:.0f}%")
+
+        await query.edit_message_text(
+            f"✅ 🇸🇬 Singapore selected.\nApplying: {', '.join(applied)}"
+        )
+        await query.message.reply_text(build_summary(context.user_data))
+        await query.message.reply_text(
+            "📋 Copy the summary above and share it with your group!\n\nWhat would you like to do next?",
+            reply_markup=done_keyboard(),
+        )
+        return ConversationHandler.END
+
+    # ── Other countries: manual entry ───────────────────
+    if query.data == "country_other":
+        push_history(context, COUNTRY_SELECT)
+        context.user_data["country"] = "Other"
+        await query.edit_message_text("🌍 Other country selected.")
+
+        if need_gst:
+            await query.message.reply_text(
+                "Enter the tax percentage (GST / VAT / SST / etc.) for your country, or 0 for none.\n"
+                "e.g. 10"
+            )
+            return MANUAL_GST
+        else:
+            # No GST needed, check service
+            context.user_data["gst"]       = 0.0
+            context.user_data["gst_label"] = "GST"
+            if need_service:
+                await query.message.reply_text(
+                    "Enter the service charge percentage for your country, or 0 for none.\n"
+                    "e.g. 10"
+                )
+                return MANUAL_SERVICE
+            else:
+                # Neither — shouldn't normally reach here but handle gracefully
+                context.user_data["service"] = 0.0
+                await query.message.reply_text(build_summary(context.user_data))
+                await query.message.reply_text(
+                    "📋 Copy the summary above and share it with your group!\n\nWhat would you like to do next?",
+                    reply_markup=done_keyboard(),
+                )
+                return ConversationHandler.END
+
+    return COUNTRY_SELECT
+
+
+# ─────────────────────────────────────────────────────────
+# Manual tax entry (Other countries)
+# ─────────────────────────────────────────────────────────
+
+async def manual_gst(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     try:
         v = float(update.message.text.strip())
         if v < 0:
             raise ValueError
     except ValueError:
         await update.message.reply_text("⚠️ Enter a valid percentage like 10 or 0.")
-        return SERVICE
-    push_history(context, SERVICE)
+        return MANUAL_GST
+
+    push_history(context, MANUAL_GST)
+    context.user_data["gst"]       = v
+    context.user_data["gst_label"] = "Tax"
+
+    if context.user_data.get("need_service"):
+        await update.message.reply_text(
+            "Enter the service charge percentage, or 0 for none.\ne.g. 10"
+        )
+        return MANUAL_SERVICE
+
+    # No service charge needed — finish
+    context.user_data["service"] = 0.0
+    await update.message.reply_text(build_summary(context.user_data))
+    await update.message.reply_text(
+        "📋 Copy the summary above and share it with your group!\n\nWhat would you like to do next?",
+        reply_markup=done_keyboard(),
+    )
+    return ConversationHandler.END
+
+
+async def manual_service(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    try:
+        v = float(update.message.text.strip())
+        if v < 0:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text("⚠️ Enter a valid percentage like 10 or 0.")
+        return MANUAL_SERVICE
+
+    push_history(context, MANUAL_SERVICE)
     context.user_data["service"] = v
     await update.message.reply_text(build_summary(context.user_data))
     await update.message.reply_text(
@@ -833,16 +1032,25 @@ def build_application() -> Application:
             REVIEW_PERSON: [
                 CallbackQueryHandler(review_person, pattern="^review_(done|edit_\\d+|remove_\\d+)$"),
             ],
-            EDIT_PRICE:     [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_price)],
+            EDIT_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_price)],
             SHARED_CONFIRM: [
                 CallbackQueryHandler(shared_confirm, pattern="^shared_(yes|no)$"),
             ],
-            SHARED_NAME_AMT:[MessageHandler(filters.TEXT & ~filters.COMMAND, shared_name_amt)],
+            SHARED_NAME_AMT: [MessageHandler(filters.TEXT & ~filters.COMMAND, shared_name_amt)],
             SHARED_PEOPLE: [
                 CallbackQueryHandler(shared_people, pattern="^(sharer_toggle_.+|sharer_confirm|sharer_noop)$"),
             ],
-            GST:     [MessageHandler(filters.TEXT & ~filters.COMMAND, get_gst)],
-            SERVICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_service)],
+            TAX_CONFIRM: [
+                CallbackQueryHandler(
+                    tax_confirm,
+                    pattern="^(tax_toggle_gst|tax_toggle_service|tax_none|tax_confirm|tax_noop)$"
+                ),
+            ],
+            COUNTRY_SELECT: [
+                CallbackQueryHandler(country_select, pattern="^country_(sg|other)$"),
+            ],
+            MANUAL_GST:     [MessageHandler(filters.TEXT & ~filters.COMMAND, manual_gst)],
+            MANUAL_SERVICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, manual_service)],
         },
         fallbacks=[
             CommandHandler("cancel",  cancel),
@@ -854,8 +1062,8 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("start",   start))
     app.add_handler(CommandHandler("help",    help_cmd))
     app.add_handler(CommandHandler("restart", restart))
-    app.add_handler(CallbackQueryHandler(button_help,  pattern="^cmd_help$"))
-    app.add_handler(CallbackQueryHandler(done_bye,     pattern="^done_bye$"))
+    app.add_handler(CallbackQueryHandler(button_help, pattern="^cmd_help$"))
+    app.add_handler(CallbackQueryHandler(done_bye,    pattern="^done_bye$"))
     app.add_handler(MessageHandler(filters.ALL, log_message), group=-1)
     app.add_handler(conv)
     return app
