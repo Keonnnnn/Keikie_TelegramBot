@@ -6,7 +6,7 @@ import os
 import copy
 import logging
 from dotenv import load_dotenv
-from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove, Update
+from telegram import BotCommand, ReplyKeyboardMarkup, ReplyKeyboardRemove, Update
 from telegram.ext import (
     Application,
     ApplicationBuilder,
@@ -626,11 +626,31 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 # ─────────────────────────────────────────────────────────
+# Menu registration
+# ─────────────────────────────────────────────────────────
+
+async def post_init(application: Application) -> None:
+    await application.bot.set_my_commands([
+        BotCommand("start",   "Start interacting with Keke"),
+        BotCommand("split",   "Start a new bill split"),
+        BotCommand("undo",    "Undo the last step"),
+        BotCommand("restart", "Restart from scratch"),
+        BotCommand("cancel",  "Quit current session"),
+        BotCommand("help",    "How to use Keke"),
+    ])
+
+
+# ─────────────────────────────────────────────────────────
 # App builder
 # ─────────────────────────────────────────────────────────
 
 def build_application() -> Application:
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app = (
+        ApplicationBuilder()
+        .token(BOT_TOKEN)
+        .post_init(post_init)
+        .build()
+    )
 
     conv = ConversationHandler(
         entry_points=[CommandHandler("split", split_start)],
