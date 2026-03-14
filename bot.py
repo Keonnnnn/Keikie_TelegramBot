@@ -97,7 +97,6 @@ def split_type_keyboard() -> InlineKeyboardMarkup:
 
 
 def review_keyboard(items: list) -> InlineKeyboardMarkup:
-    """One row per item showing the item name with ✏️ and 🗑️ action buttons."""
     rows = []
     for i, (iname, iamt) in enumerate(items):
         rows.append([
@@ -105,6 +104,22 @@ def review_keyboard(items: list) -> InlineKeyboardMarkup:
             InlineKeyboardButton(f"🗑️ {iname}", callback_data=f"review_remove_{i}"),
         ])
     rows.append([InlineKeyboardButton("✅  Confirm & continue", callback_data="review_done")])
+    return InlineKeyboardMarkup(rows)
+
+
+def sharers_keyboard(names: list, selected: list) -> InlineKeyboardMarkup:
+    """Checklist of all known people — ticking toggles selection."""
+    rows = []
+    for name in names:
+        tick = "☑️" if name in selected else "☐"
+        rows.append([InlineKeyboardButton(
+            f"{tick}  {name}", callback_data=f"sharer_toggle_{name}"
+        )])
+    # Confirm only enabled when at least one person is selected
+    if selected:
+        rows.append([InlineKeyboardButton("✅  Confirm", callback_data="sharer_confirm")])
+    else:
+        rows.append([InlineKeyboardButton("— Select at least one person —", callback_data="sharer_noop")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -150,7 +165,7 @@ def _re_prompt(state: int, data: dict) -> str:
         REVIEW_PERSON:  "Review your items above.",
         SHARED_CONFIRM: "Do you have any shared items to add?",
         SHARED_NAME_AMT:"Enter the shared item as: Name, amount",
-        SHARED_PEOPLE:  "Who shares this item? Enter names separated by commas.",
+        SHARED_PEOPLE:  "Select who shares this item.",
         GST:            "Enter GST percentage (e.g. 9), or 0 for none.",
         SERVICE:        "Enter service charge percentage (e.g. 10), or 0 for none.",
     }
@@ -540,7 +555,7 @@ async def review_person(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     if data.startswith("review_remove_"):
         idx = int(data.split("_")[-1])
         if 0 <= idx < len(items):
-            removed_name, _ = items.pop(idx)
+            items.pop(idx)
             if items:
                 person_total = sum(a for _, a in items)
                 lines = [f"📋 *{name}'s items* (subtotal: {fmt(person_total)})", ""]
@@ -635,37 +650,63 @@ async def shared_name_amt(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     push_history(context, SHARED_NAME_AMT)
     context.user_data["pending_shared"] = {"name": iname, "amount": iamt}
+    context.user_data["pending_sharers"] = []  # start with nobody selected
+
     known = context.user_data["names"]
     await update.message.reply_text(
-        f"Who shares {iname}? Enter names separated by commas.\n"
-        f"(Known people: {', '.join(known)})")
+        f"Who shares *{iname}*? Tap to select, then confirm.",
+        parse_mode="Markdown",
+        reply_markup=sharers_keyboard(known, []),
+    )
     return SHARED_PEOPLE
 
 
 async def shared_people(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    known   = context.user_data["names"]
-    entered = [n.strip() for n in update.message.text.split(",")]
-    valid   = [n for n in entered if n in known]
-    invalid = [n for n in entered if n not in known]
+    query = update.callback_query
+    await query.answer()
 
-    if not valid:
-        await update.message.reply_text(
-            f"⚠️ No valid names. Known people: {', '.join(known)}\nPlease try again.")
+    known    = context.user_data["names"]
+    selected = context.user_data.get("pending_sharers", [])
+    item     = context.user_data["pending_shared"]
+
+    if query.data == "sharer_noop":
         return SHARED_PEOPLE
 
-    if invalid:
-        await update.message.reply_text(f"⚠️ Skipping unrecognised: {', '.join(invalid)}.")
+    if query.data == "sharer_confirm":
+        if not selected:
+            await query.answer("Please select at least one person.", show_alert=True)
+            return SHARED_PEOPLE
 
-    push_history(context, SHARED_PEOPLE)
-    item = context.user_data.pop("pending_shared")
-    context.user_data["shared_items"].append((item["name"], item["amount"], valid))
+        push_history(context, SHARED_PEOPLE)
+        context.user_data.pop("pending_shared")
+        context.user_data.pop("pending_sharers", None)
+        context.user_data["shared_items"].append((item["name"], item["amount"], selected))
 
-    await update.message.reply_text(
-        f"Added {item['name']} {fmt(item['amount'])} shared by {', '.join(valid)}.\n\n"
-        "Add another shared item?",
-        reply_markup=yn_keyboard(),
-    )
-    return SHARED_CONFIRM
+        await query.edit_message_text(
+            f"✅ Added *{item['name']}* {fmt(item['amount'])} — shared by {', '.join(selected)}.",
+            parse_mode="Markdown",
+        )
+        await query.message.reply_text(
+            "Add another shared item?",
+            reply_markup=yn_keyboard(),
+        )
+        return SHARED_CONFIRM
+
+    if query.data.startswith("sharer_toggle_"):
+        name = query.data[len("sharer_toggle_"):]
+        if name in selected:
+            selected.remove(name)
+        else:
+            selected.append(name)
+        context.user_data["pending_sharers"] = selected
+
+        # Update the checklist in place
+        await query.edit_message_reply_markup(
+            reply_markup=sharers_keyboard(known, selected)
+        )
+        return SHARED_PEOPLE
+
+    return SHARED_PEOPLE
 
 
 # ─────────────────────────────────────────────────────────
@@ -762,9 +803,11 @@ def build_application() -> Application:
                 CallbackQueryHandler(shared_confirm, pattern="^shared_(yes|no)$"),
             ],
             SHARED_NAME_AMT:[MessageHandler(filters.TEXT & ~filters.COMMAND, shared_name_amt)],
-            SHARED_PEOPLE:  [MessageHandler(filters.TEXT & ~filters.COMMAND, shared_people)],
-            GST:            [MessageHandler(filters.TEXT & ~filters.COMMAND, get_gst)],
-            SERVICE:        [MessageHandler(filters.TEXT & ~filters.COMMAND, get_service)],
+            SHARED_PEOPLE: [
+                CallbackQueryHandler(shared_people, pattern="^(sharer_toggle_.+|sharer_confirm|sharer_noop)$"),
+            ],
+            GST:     [MessageHandler(filters.TEXT & ~filters.COMMAND, get_gst)],
+            SERVICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_service)],
         },
         fallbacks=[
             CommandHandler("cancel",  cancel),
