@@ -33,6 +33,12 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 # ─────────────────────────────────────────────────────────
+# Sticker — replace with your file_id after finding it
+# ─────────────────────────────────────────────────────────
+STICKER_ID = None  # e.g. "CAACAgIAAxkBAAI..."
+
+
+# ─────────────────────────────────────────────────────────
 # States
 # ─────────────────────────────────────────────────────────
 (
@@ -108,14 +114,12 @@ def review_keyboard(items: list) -> InlineKeyboardMarkup:
 
 
 def sharers_keyboard(names: list, selected: list) -> InlineKeyboardMarkup:
-    """Checklist of all known people — ticking toggles selection."""
     rows = []
     for name in names:
         tick = "☑️" if name in selected else "☐"
         rows.append([InlineKeyboardButton(
             f"{tick}  {name}", callback_data=f"sharer_toggle_{name}"
         )])
-    # Confirm only enabled when at least one person is selected
     if selected:
         rows.append([InlineKeyboardButton("✅  Confirm", callback_data="sharer_confirm")])
     else:
@@ -134,9 +138,16 @@ def progress(data: dict) -> str:
 # ─────────────────────────────────────────────────────────
 
 async def log_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.message and update.message.text:
-        user = update.message.from_user
-        name = user.username or user.first_name or "unknown"
+    if not update.message:
+        return
+    user = update.message.from_user
+    name = user.username or user.first_name or "unknown"
+
+    if update.message.sticker:
+        file_id = update.message.sticker.file_id
+        print(f"[{name}] sent a sticker — file_id: {file_id}")
+        print(f"  👆 Copy that into STICKER_ID at the top of bot_app.py")
+    elif update.message.text:
         print(f"[{name}]: {update.message.text}")
 
 
@@ -261,6 +272,8 @@ def build_summary(data: dict) -> str:
 # ─────────────────────────────────────────────────────────
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if STICKER_ID:
+        await update.message.reply_sticker(STICKER_ID)
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("➗  Split a bill", callback_data="cmd_split")],
         [InlineKeyboardButton("💡  How it works", callback_data="cmd_help")],
@@ -649,8 +662,8 @@ async def shared_name_amt(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return SHARED_NAME_AMT
 
     push_history(context, SHARED_NAME_AMT)
-    context.user_data["pending_shared"] = {"name": iname, "amount": iamt}
-    context.user_data["pending_sharers"] = []  # start with nobody selected
+    context.user_data["pending_shared"]  = {"name": iname, "amount": iamt}
+    context.user_data["pending_sharers"] = []
 
     known = context.user_data["names"]
     await update.message.reply_text(
@@ -699,8 +712,6 @@ async def shared_people(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         else:
             selected.append(name)
         context.user_data["pending_sharers"] = selected
-
-        # Update the checklist in place
         await query.edit_message_reply_markup(
             reply_markup=sharers_keyboard(known, selected)
         )
