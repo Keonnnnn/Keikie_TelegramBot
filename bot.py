@@ -116,10 +116,10 @@ def yn_keyboard() -> InlineKeyboardMarkup:
 
 
 def split_type_keyboard() -> InlineKeyboardMarkup:
+    # No action bar here — it's the very first step
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("⚖️  Equal",      callback_data="split_equal")],
         [InlineKeyboardButton("🧮  Individual", callback_data="split_individual")],
-        *action_bar(),
     ])
 
 
@@ -188,9 +188,11 @@ def progress(data: dict) -> str:
     return f"[{idx + 1}/{total}] " if total else ""
 
 
-def _action_bar_hint() -> str:
-    """Small reminder shown under text-input prompts."""
-    return "\n\n_Use the buttons below to go back, restart, or exit._"
+# ─────────────────────────────────────────────────────────
+# Standalone action bar markup (for text-input steps)
+# ─────────────────────────────────────────────────────────
+
+ACTION_BAR_MARKUP = InlineKeyboardMarkup(action_bar())
 
 
 # ─────────────────────────────────────────────────────────
@@ -208,22 +210,6 @@ async def log_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         print(f"  👆 Copy that into STICKER_ID at the top of bot_app.py")
     elif update.message.text:
         print(f"[{name}]: {update.message.text}")
-
-
-# ─────────────────────────────────────────────────────────
-# Persistent action-bar keyboard (for text-input steps)
-# Shown as a separate message so users always have buttons
-# ─────────────────────────────────────────────────────────
-
-ACTION_BAR_MARKUP = InlineKeyboardMarkup(action_bar())
-
-
-async def _send_action_bar(message_obj) -> None:
-    """Send a standalone action bar below a text-input prompt."""
-    await message_obj.reply_text(
-        "⬅️ Back  •  🔄 Restart  •  ✖️ Exit",
-        reply_markup=ACTION_BAR_MARKUP,
-    )
 
 
 # ─────────────────────────────────────────────────────────
@@ -273,7 +259,7 @@ def _state_keyboard(state: int, data: dict):
     """Return the right keyboard for a given state (used after Back)."""
     if state == CHOICE:
         return split_type_keyboard()
-    if state in (SHARED_CONFIRM,):
+    if state == SHARED_CONFIRM:
         return yn_keyboard()
     if state == TAX_CONFIRM:
         return tax_keyboard(data.get("pending_taxes", []))
@@ -423,8 +409,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "*Equal split* — enter the final receipt total and number of people. "
         "Everyone pays the same amount.\n\n"
         "*Individual split* — enter each person's name and their items (name + price). "
-        "Optionally add shared items split among specific people, then choose your taxes.\n\n"
-        "At each step you'll see *Back*, *Restart*, and *Exit* buttons to navigate freely.",
+        "Optionally add shared items split among specific people, then choose your taxes.",
         parse_mode="Markdown",
         reply_markup=keyboard,
     )
@@ -441,8 +426,7 @@ async def button_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         "*Equal split* — enter the final receipt total and number of people. "
         "Everyone pays the same amount.\n\n"
         "*Individual split* — enter each person's name and their items (name + price). "
-        "Optionally add shared items split among specific people, then choose your taxes.\n\n"
-        "At each step you'll see *Back*, *Restart*, and *Exit* buttons to navigate freely.",
+        "Optionally add shared items split among specific people, then choose your taxes.",
         parse_mode="Markdown",
         reply_markup=keyboard,
     )
@@ -1134,7 +1118,6 @@ def build_application() -> Application:
         .build()
     )
 
-    # Action-bar pattern covers all three buttons across all states
     ACTION_PATTERN = "^action_(back|restart|exit)$"
 
     conv = ConversationHandler(
@@ -1145,7 +1128,7 @@ def build_application() -> Application:
         states={
             CHOICE: [
                 CallbackQueryHandler(choose_split_type, pattern="^split_(equal|individual)$"),
-                CallbackQueryHandler(handle_action_bar, pattern=ACTION_PATTERN),
+                # No action bar on the first step
             ],
             TOTAL: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, get_total),
