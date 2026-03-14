@@ -96,6 +96,19 @@ def split_type_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
+def review_keyboard(items: list) -> InlineKeyboardMarkup:
+    """One row per item with ✏️ edit and 🗑️ remove buttons, plus a confirm row."""
+    rows = []
+    for i, (iname, iamt) in enumerate(items):
+        rows.append([
+            InlineKeyboardButton(f"{iname}  —  {fmt(iamt)}", callback_data=f"review_noop"),
+            InlineKeyboardButton("✏️", callback_data=f"review_edit_{i}"),
+            InlineKeyboardButton("🗑️", callback_data=f"review_remove_{i}"),
+        ])
+    rows.append([InlineKeyboardButton("✅  Confirm & continue", callback_data="review_done")])
+    return InlineKeyboardMarkup(rows)
+
+
 def progress(data: dict) -> str:
     idx   = data.get("current_person_index", 0)
     total = data.get("people", 0)
@@ -135,7 +148,7 @@ def _re_prompt(state: int, data: dict) -> str:
         ITEM_COUNT:     f"How many items did {data.get('current_name', '?')} order?",
         ITEM_NAME:      f"What's the name of {data.get('current_name', '?')}'s item {data.get('current_item', '?')}?",
         ITEM_AMOUNT:    f"Enter the amount for {data.get('current_item_name', 'the item')}:",
-        REVIEW_PERSON:  "Review items above. Reply done / edit N / remove N.",
+        REVIEW_PERSON:  "Review your items above.",
         SHARED_CONFIRM: "Do you have any shared items to add?",
         SHARED_NAME_AMT:"Enter the shared item as: Name, amount",
         SHARED_PEOPLE:  "Who shares this item? Enter names separated by commas.",
@@ -159,7 +172,6 @@ async def undo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     label = STATE_LABELS.get(prev_state, "previous step")
     await update.message.reply_text(
         f"Undone! Back to: {label}\n\n" + _re_prompt(prev_state, context.user_data),
-        reply_markup=ReplyKeyboardRemove(),
     )
     return prev_state
 
@@ -268,17 +280,6 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
-async def restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data.clear()
-    await update.message.reply_text("🔄 Restarted. Send /split to begin.",
-                                    reply_markup=ReplyKeyboardRemove())
-    return ConversationHandler.END
-
-
-# ─────────────────────────────────────────────────────────
-# Button handler (outside conversation: cmd_help)
-# ─────────────────────────────────────────────────────────
-
 async def button_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
@@ -300,12 +301,17 @@ async def button_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     )
 
 
+async def restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    context.user_data.clear()
+    await update.message.reply_text("🔄 Restarted. Send /split to begin.")
+    return ConversationHandler.END
+
+
 # ─────────────────────────────────────────────────────────
 # Conversation entry points
 # ─────────────────────────────────────────────────────────
 
 async def split_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Entry via /split command."""
     context.user_data.clear()
     await update.message.reply_text(
         "How do you want to split the bill?",
@@ -315,7 +321,6 @@ async def split_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 
 
 async def split_start_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Entry via inline 'Split a bill' button."""
     query = update.callback_query
     await query.answer()
     context.user_data.clear()
@@ -327,15 +332,14 @@ async def split_start_button(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 # ─────────────────────────────────────────────────────────
-# Choose split type (inline buttons)
+# Choose split type
 # ─────────────────────────────────────────────────────────
 
 async def choose_split_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
-    choice = query.data  # "split_equal" or "split_individual"
 
-    if choice == "split_equal":
+    if query.data == "split_equal":
         push_history(context, CHOICE)
         context.user_data["split_type"] = "equal"
         await query.message.reply_text(
@@ -343,7 +347,7 @@ async def choose_split_type(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         )
         return TOTAL
 
-    if choice == "split_individual":
+    if query.data == "split_individual":
         push_history(context, CHOICE)
         context.user_data["split_type"]           = "individual"
         context.user_data["names"]                = []
@@ -355,7 +359,6 @@ async def choose_split_type(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         )
         return PEOPLE_INDIV
 
-    await query.message.reply_text("Please tap ⚖️ Equal or 🧮 Individual.")
     return CHOICE
 
 
@@ -487,65 +490,69 @@ async def get_individual_amount(update: Update, context: ContextTypes.DEFAULT_TY
     return await _show_person_review(update, context, name)
 
 
+# ─────────────────────────────────────────────────────────
+# Item review (button-based)
+# ─────────────────────────────────────────────────────────
+
 async def _show_person_review(update: Update, context: ContextTypes.DEFAULT_TYPE, name: str) -> int:
     items = context.user_data["amounts_by_person"][name]
     person_total = sum(a for _, a in items)
-    lines = [f"📋 {name}'s items (subtotal: {fmt(person_total)})", ""]
-    for i, (iname, iamt) in enumerate(items, 1):
-        lines.append(f"  {i}. {iname} — {fmt(iamt)}")
-    lines += [
-        "",
-        "Reply:",
-        "  done     — confirm and continue",
-        "  edit N   — change price of item N  (e.g. edit 2)",
-        "  remove N — delete item N           (e.g. remove 1)",
-    ]
-    await update.message.reply_text("\n".join(lines))
+
+    # Send or edit the review message
+    text = f"📋 *{name}'s items* (subtotal: {fmt(person_total)})\n\nTap ✏️ to edit a price or 🗑️ to remove an item."
+    msg_func = update.message.reply_text if update.message else update.callback_query.message.reply_text
+    await msg_func(
+        text,
+        parse_mode="Markdown",
+        reply_markup=review_keyboard(items),
+    )
     return REVIEW_PERSON
 
 
 async def review_person(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    text  = update.message.text.strip().lower()
+    query = update.callback_query
+    await query.answer()
     name  = context.user_data["current_name"]
     items = context.user_data["amounts_by_person"][name]
+    data  = query.data
 
-    if text == "done":
+    if data == "review_done":
         push_history(context, REVIEW_PERSON)
-        return await _advance_to_next_person_or_shared(update, context)
+        return await _advance_to_next_person_or_shared(query, context)
 
-    if text.startswith("edit "):
-        parts = text.split()
-        if len(parts) == 2 and parts[1].isdigit():
-            idx = int(parts[1]) - 1
-            if 0 <= idx < len(items):
-                context.user_data["edit_item_idx"] = idx
-                iname, iamt = items[idx]
-                await update.message.reply_text(
-                    f"Current price of {iname} is {fmt(iamt)}. What's the new price?")
-                return EDIT_PRICE
-            await update.message.reply_text(f"⚠️ Item number out of range (1-{len(items)}).")
-            return REVIEW_PERSON
-        await update.message.reply_text("⚠️ Use: edit N  (e.g. edit 2)")
+    if data == "review_noop":
         return REVIEW_PERSON
 
-    if text.startswith("remove "):
-        parts = text.split()
-        if len(parts) == 2 and parts[1].isdigit():
-            idx = int(parts[1]) - 1
-            if 0 <= idx < len(items):
-                removed = items.pop(idx)
-                await update.message.reply_text(f"Removed {removed[0]} ({fmt(removed[1])}).")
-                if items:
-                    return await _show_person_review(update, context, name)
-                await update.message.reply_text(
+    if data.startswith("review_edit_"):
+        idx = int(data.split("_")[-1])
+        if 0 <= idx < len(items):
+            context.user_data["edit_item_idx"] = idx
+            iname, iamt = items[idx]
+            await query.message.reply_text(
+                f"Current price of *{iname}* is {fmt(iamt)}.\nEnter the new price:",
+                parse_mode="Markdown",
+            )
+            return EDIT_PRICE
+
+    if data.startswith("review_remove_"):
+        idx = int(data.split("_")[-1])
+        if 0 <= idx < len(items):
+            removed_name, removed_amt = items.pop(idx)
+            if items:
+                # Refresh the review message with updated list
+                person_total = sum(a for _, a in items)
+                await query.edit_message_text(
+                    f"📋 *{name}'s items* (subtotal: {fmt(person_total)})\n\nTap ✏️ to edit a price or 🗑️ to remove an item.",
+                    parse_mode="Markdown",
+                    reply_markup=review_keyboard(items),
+                )
+            else:
+                await query.edit_message_text(f"All items removed for {name}.")
+                await query.message.reply_text(
                     f"No items left for {name}. How many items did they order?")
                 return ITEM_COUNT
-            await update.message.reply_text(f"⚠️ Item number out of range (1-{len(items)}).")
-            return REVIEW_PERSON
-        await update.message.reply_text("⚠️ Use: remove N  (e.g. remove 1)")
         return REVIEW_PERSON
 
-    await update.message.reply_text("⚠️ Reply: done / edit N / remove N")
     return REVIEW_PERSON
 
 
@@ -560,22 +567,28 @@ async def edit_price(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     except ValueError:
         await update.message.reply_text("⚠️ Please enter a valid price (e.g. 12.50).")
         return EDIT_PRICE
+
     old_name, old_price = items[idx]
     items[idx] = (old_name, new_price)
-    await update.message.reply_text(f"Updated {old_name}: {fmt(old_price)} -> {fmt(new_price)}")
+    await update.message.reply_text(
+        f"✅ Updated *{old_name}*: {fmt(old_price)} → {fmt(new_price)}",
+        parse_mode="Markdown",
+    )
     return await _show_person_review(update, context, name)
 
 
-async def _advance_to_next_person_or_shared(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def _advance_to_next_person_or_shared(query_or_update, context: ContextTypes.DEFAULT_TYPE) -> int:
     next_index = context.user_data["current_person_index"] + 1
     context.user_data["current_person_index"] = next_index
 
+    # Support being called from both a callback query and a message update
+    reply = query_or_update.message.reply_text
+
     if next_index < context.user_data["people"]:
-        await update.message.reply_text(
-            f"{progress(context.user_data)}What's the name of Person {next_index + 1}?")
+        await reply(f"{progress(context.user_data)}What's the name of Person {next_index + 1}?")
         return NAME_INDIV
 
-    await update.message.reply_text(
+    await reply(
         "All personal items recorded!\n\nDo you have any shared items to add?\n"
         "(e.g. a bottle of wine split among specific people)",
         reply_markup=yn_keyboard(),
@@ -731,14 +744,16 @@ def build_application() -> Application:
             CHOICE: [
                 CallbackQueryHandler(choose_split_type, pattern="^split_(equal|individual)$"),
             ],
-            TOTAL:          [MessageHandler(filters.TEXT & ~filters.COMMAND, get_total)],
-            PEOPLE_EQUAL:   [MessageHandler(filters.TEXT & ~filters.COMMAND, get_people_equal)],
-            PEOPLE_INDIV:   [MessageHandler(filters.TEXT & ~filters.COMMAND, get_people_individual)],
-            NAME_INDIV:     [MessageHandler(filters.TEXT & ~filters.COMMAND, get_name_individual)],
-            ITEM_COUNT:     [MessageHandler(filters.TEXT & ~filters.COMMAND, get_item_count)],
-            ITEM_NAME:      [MessageHandler(filters.TEXT & ~filters.COMMAND, get_item_name)],
-            ITEM_AMOUNT:    [MessageHandler(filters.TEXT & ~filters.COMMAND, get_individual_amount)],
-            REVIEW_PERSON:  [MessageHandler(filters.TEXT & ~filters.COMMAND, review_person)],
+            TOTAL:        [MessageHandler(filters.TEXT & ~filters.COMMAND, get_total)],
+            PEOPLE_EQUAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_people_equal)],
+            PEOPLE_INDIV: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_people_individual)],
+            NAME_INDIV:   [MessageHandler(filters.TEXT & ~filters.COMMAND, get_name_individual)],
+            ITEM_COUNT:   [MessageHandler(filters.TEXT & ~filters.COMMAND, get_item_count)],
+            ITEM_NAME:    [MessageHandler(filters.TEXT & ~filters.COMMAND, get_item_name)],
+            ITEM_AMOUNT:  [MessageHandler(filters.TEXT & ~filters.COMMAND, get_individual_amount)],
+            REVIEW_PERSON: [
+                CallbackQueryHandler(review_person, pattern="^review_(done|noop|edit_\\d+|remove_\\d+)$"),
+            ],
             EDIT_PRICE:     [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_price)],
             SHARED_CONFIRM: [
                 CallbackQueryHandler(shared_confirm, pattern="^shared_(yes|no)$"),
