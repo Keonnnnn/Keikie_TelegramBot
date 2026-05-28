@@ -6,7 +6,6 @@ from telegram import (
     BotCommand,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
-    ReplyKeyboardRemove,
     Update,
 )
 from telegram.ext import (
@@ -27,6 +26,8 @@ logging.basicConfig(
 
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+if not BOT_TOKEN:
+    raise RuntimeError("BOT_TOKEN is missing. Check your .env file or deployment environment variables.")
 
 # ─────────────────────────────────────────────────────────
 # Sticker
