@@ -19,9 +19,11 @@ from telegram.ext import (
     MessageHandler,
     filters,
 )
-from PIL import Image
-import pytesseract
 import re
+import json
+import asyncio
+import base64
+from openai import AsyncOpenAI
 
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
@@ -30,12 +32,17 @@ logging.basicConfig(
 
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-TESSERACT_CMD = os.getenv("TESSERACT_CMD")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
-if TESSERACT_CMD:
-    pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is missing. Check your .env file or deployment environment variables.")
+if not OPENROUTER_API_KEY:
+    raise RuntimeError("OPENROUTER_API_KEY is missing. Check your .env file.")
+
+openrouter_client = AsyncOpenAI(
+    api_key=OPENROUTER_API_KEY,
+    base_url="https://openrouter.ai/api/v1",
+)
 
 # ─────────────────────────────────────────────────────────
 # Sticker
@@ -195,6 +202,45 @@ def done_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("👋  That's all for now!", callback_data="done_bye")],
     ])
 
+# (label, tax_rate, service_rate, tax_name)
+KNOWN_COUNTRIES = {
+    "sg": ("🇸🇬 Singapore", 9.0,  10.0, "GST"),
+    "my": ("🇲🇾 Malaysia",  6.0,  10.0, "SST"),
+    "au": ("🇦🇺 Australia", 10.0,  0.0, "GST"),
+    "uk": ("🇬🇧 UK",        20.0,  0.0, "VAT"),
+    "jp": ("🇯🇵 Japan",     10.0,  0.0, "Consumption Tax"),
+}
+
+
+def receipt_tax_type_keyboard(selected: list) -> InlineKeyboardMarkup:
+    gst_tick     = "☑️" if "gst"     in selected else "☐"
+    service_tick = "☑️" if "service" in selected else "☐"
+    rows = [
+        [InlineKeyboardButton(f"{gst_tick}  GST / VAT / Tax",   callback_data="rtax_toggle_gst")],
+        [InlineKeyboardButton(f"{service_tick}  Service Charge", callback_data="rtax_toggle_service")],
+        [InlineKeyboardButton("❌  No taxes",                    callback_data="rtax_none")],
+    ]
+    if selected:
+        rows.append([InlineKeyboardButton("✅  Confirm", callback_data="rtax_tax_confirm")])
+    else:
+        rows.append([InlineKeyboardButton("— Select taxes or choose No taxes —", callback_data="rtax_noop")])
+    return InlineKeyboardMarkup(rows)
+
+
+def receipt_country_keyboard(need_gst: bool, need_service: bool) -> InlineKeyboardMarkup:
+    rows = []
+    for code, (label, gst, service, tax_name) in KNOWN_COUNTRIES.items():
+        parts = []
+        if need_gst and gst:
+            parts.append(f"{tax_name} {gst:.0f}%")
+        if need_service and service:
+            parts.append(f"Service {service:.0f}%")
+        if parts:
+            rows.append([InlineKeyboardButton(f"{label}  ({', '.join(parts)})", callback_data=f"rtax_country_{code}")])
+    rows.append([InlineKeyboardButton("🌍  Other (custom rates)", callback_data="rtax_country_other")])
+    return InlineKeyboardMarkup(rows)
+
+
 def receipt_confirm_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ Confirm items", callback_data="receipt_confirm")],
@@ -253,23 +299,55 @@ def sharers_keyboard(names: list, selected: list) -> InlineKeyboardMarkup:
     rows += action_bar()
     return InlineKeyboardMarkup(rows)
 
-def receipt_assignment_checklist_keyboard(people: list, selected: list) -> InlineKeyboardMarkup:
+def receipt_single_assign_keyboard(people: list, selected: list, index: int) -> InlineKeyboardMarkup:
     rows = []
+    person_buttons = []
+    for j, person in enumerate(people):
+        tick = "✅" if person in selected else "☐"
+        person_buttons.append(
+            InlineKeyboardButton(f"{tick} {person}", callback_data=f"bulk_t_{j}")
+        )
+    rows.append(person_buttons)
+    nav = []
+    if index > 0:
+        nav.append(InlineKeyboardButton("⬅️ Back", callback_data="bulk_back"))
+    if selected:
+        nav.append(InlineKeyboardButton("➡️ Confirm", callback_data="bulk_done"))
+    else:
+        nav.append(InlineKeyboardButton("— Select at least one —", callback_data="bulk_noop"))
+    rows.append(nav)
+    return InlineKeyboardMarkup(rows)
 
-    for person in people:
-        tick = "☑️" if person in selected else "☐"
-        rows.append([
-            InlineKeyboardButton(
-                f"{tick} {person}",
-                callback_data=f"receipt_toggle_{person}"
-            )
-        ])
 
-    rows.append([
-        InlineKeyboardButton("✅ Confirm selection", callback_data="receipt_assignment_confirm")
+def receipt_review_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Generate split", callback_data="bulk_generate")],
+        [InlineKeyboardButton("↩️ Redo from Item 1", callback_data="bulk_reassign")],
     ])
 
-    return InlineKeyboardMarkup(rows)
+
+def single_assign_message(item_name: str, amount: float, index: int, total: int) -> str:
+    progress_bar = "●" * (index + 1) + "○" * (total - index - 1)
+    return (
+        f"*Item {index + 1} of {total}* | {progress_bar}\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"🍽️ *{item_name}*\n"
+        f"💵 {fmt(amount)}\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"Who had this?"
+    )
+
+
+def review_assignments_message(items: list, assignments: dict) -> str:
+    lines = ["📋 *Review your assignments:*\n", "━━━━━━━━━━━━━━━━━━━━━"]
+    for i, (name, amount) in enumerate(items):
+        people = assignments.get(i, [])
+        people_str = " & ".join(people) if people else "—"
+        lines.append(f"\n🍽️ *{name}*")
+        lines.append(f"💵 {fmt(amount)}  →  👤 {people_str}")
+    lines.append("\n━━━━━━━━━━━━━━━━━━━━━")
+    lines.append("Looks good?")
+    return "\n".join(lines)
 
 def receipt_edit_keyboard(items: list) -> InlineKeyboardMarkup:
     rows = []
@@ -311,7 +389,7 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
 
     photo = update.message.photo[-1]
 
-    await update.message.reply_text("📸 Receipt received! Reading it now...")
+    await update.message.reply_text("📸 Got it! Reading your receipt...")
 
     file = await context.bot.get_file(photo.file_id)
     file_path = "receipt.jpg"
@@ -319,62 +397,75 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
     await file.download_to_drive(file_path)
 
     try:
-        image = Image.open(file_path)
+        await update.message.reply_text("🔍 Detecting items...")
 
-        image = image.convert("L")
+        prompt = """You are a receipt parser. Look at this receipt image and extract only the ordered food/drink items and their prices.
 
-        width, height = image.size
-        image = image.resize((width * 2, height * 2))
+Rules:
+- Ignore subtotals, totals, GST, service charge, taxes, table numbers, server names, dates, addresses, payment methods
+- Each item should have a clean name and its price in dollars
+- If a quantity is shown (e.g. "2x Escargots $11.80"), keep it as ONE entry with the full price (e.g. {"name": "Escargots (x2)", "price": 11.80}) — do NOT split into separate entries
+- If an item has add-ons or modifiers with a price (e.g. "+ Upsize $1.00"), add that cost to the parent item's total price — do NOT list modifiers as separate items
+- Ignore add-ons that cost $0.00
+- Return ONLY a JSON array like: [{"name": "Chicken Rice", "price": 5.50}, ...]
+- No explanation, no markdown, just the raw JSON array"""
 
-        image = image.point(lambda x: 0 if x < 150 else 255, "1")
+        with open(file_path, "rb") as f:
+            image_bytes = f.read()
+        image_b64 = base64.b64encode(image_bytes).decode("utf-8")
 
-        text = pytesseract.image_to_string(
-            image,
-            config="--psm 6"
-        )
+        response = None
+        for attempt in range(3):
+            try:
+                response = await openrouter_client.chat.completions.create(
+                    model="google/gemini-2.5-flash",
+                    messages=[{
+                        "role": "user",
+                        "content": [
+                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
+                            {"type": "text", "text": prompt},
+                        ]
+                    }],
+                )
+                break
+            except Exception as retry_err:
+                if attempt < 2:
+                    await asyncio.sleep(5)
+                else:
+                    raise retry_err
 
-        detected_text = text[:3500]
-        detected_items = []
+        raw_json = response.choices[0].message.content.strip()
+        raw_json = re.sub(r"^```json\s*", "", raw_json)
+        raw_json = re.sub(r"^```\s*", "", raw_json)
+        raw_json = re.sub(r"\s*```$", "", raw_json)
 
-        for line in text.splitlines():
-            line = line.strip()
-
-            match = re.search(
-                r"(.+?)\s+\$?\s*(\d+[\.,]\d{2})(?:\s+\D*)?$",
-                line
-            )
-
-            if match:
-                raw_name = match.group(1).strip()
-                amount = float(match.group(2).replace(",", "."))
-
-                name = clean_receipt_item_name(raw_name)
-
-                if not should_skip_receipt_line(name, amount):
-                    detected_items.append((name, amount))
+        parsed = json.loads(raw_json)
+        detected_items = [(item["name"], float(item["price"])) for item in parsed if item.get("name") and item.get("price")]
 
         if detected_items:
             context.user_data["receipt_items"] = detected_items
 
             response = "🧾 Detected items:\n\n"
-
             for i, (name, amount) in enumerate(detected_items, 1):
                 response += f"{i}. {name} — {fmt(amount)}\n"
-
             response += "\nDoes this look correct?"
 
             await update.message.reply_text(
                 response,
                 reply_markup=receipt_confirm_keyboard()
             )
-
         else:
             await update.message.reply_text(
-                f"⚠️ I couldn't confidently detect items yet.\n\nRaw OCR:\n\n{detected_text}"
+                "⚠️ AI couldn't find any items. Try a clearer photo.",
+                reply_markup=receipt_confirm_keyboard()
             )
 
+    except json.JSONDecodeError as e:
+        logging.error("Gemini returned invalid JSON: %s", e)
+        await update.message.reply_text("⚠️ AI returned an unexpected response. Please try again.")
     except Exception as e:
-        await update.message.reply_text(f"⚠️ OCR failed:\n{e}")
+        logging.error("Receipt processing failed: %s", e)
+        await update.message.reply_text(f"⚠️ Something went wrong:\n{e}")
 
 async def log_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message:
@@ -579,7 +670,8 @@ def build_summary(data: dict) -> str:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_sticker(STICKER_ID)
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("➗  Split a bill", callback_data="cmd_split")],
+        [InlineKeyboardButton("📸  Scan receipt", callback_data="cmd_scan")],
+        [InlineKeyboardButton("✏️  Enter manually", callback_data="cmd_split")],
         [InlineKeyboardButton("💡  How it works", callback_data="cmd_help")],
     ])
     await update.message.reply_text(
@@ -605,6 +697,14 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Optionally add shared items split among specific people, then choose your taxes.",
         parse_mode="Markdown",
         reply_markup=keyboard,
+    )
+
+
+async def button_scan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    await query.message.reply_text(
+        "📸 Send me a photo of your receipt and I'll read it for you!"
     )
 
 
@@ -854,11 +954,38 @@ async def receipt_edit_item_text(update: Update, context: ContextTypes.DEFAULT_T
 
     
 async def receipt_text_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if context.user_data.get("receipt_tax_stage"):
+        await receipt_custom_tax_input(update, context)
+        return
+
     if context.user_data.get("receipt_edit_index") is not None:
         await receipt_edit_item_text(update, context)
         return
 
     await receipt_add_item_text(update, context)
+
+
+async def receipt_custom_tax_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    try:
+        v = float(update.message.text.strip())
+        if v < 0:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text("⚠️ Enter a valid percentage like 9 or 0.")
+        return
+
+    stage = context.user_data.get("receipt_tax_stage")
+
+    if stage == "gst":
+        context.user_data["receipt_gst"] = v
+        context.user_data["receipt_tax_stage"] = "service"
+        await update.message.reply_text(
+            "Enter the service charge percentage (e.g. 10), or 0 for none:"
+        )
+    elif stage == "service":
+        context.user_data["receipt_service"] = v
+        context.user_data.pop("receipt_tax_stage", None)
+        await send_receipt_split_summary(update.message, context)
 
 
 async def receipt_add_item_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -956,101 +1083,187 @@ async def receipt_add_item_text(update: Update, context: ContextTypes.DEFAULT_TY
 
 async def ask_receipt_item_assignment(message_obj, context: ContextTypes.DEFAULT_TYPE) -> int:
     items = context.user_data.get("receipt_items", [])
-    index = context.user_data.get("receipt_assign_index", 0)
-
-    if index >= len(items):
-        await message_obj.reply_text("✅ All items assigned!")
-        return ConversationHandler.END
-
-    item_name, amount = items[index]
     people = context.user_data.get("receipt_people", [])
+    context.user_data["bulk_assignments"] = {}
+    context.user_data["bulk_index"] = 0
+    context.user_data["bulk_selected"] = []
 
-    context.user_data["receipt_current_selected"] = []
-
+    item_name, amount = items[0]
     await message_obj.reply_text(
-        f"Who had this item?\n\n"
-        f"🧾 {item_name}\n"
-        f"💵 {fmt(amount)}\n\n"
-        f"Tap one or more people, then confirm.",
-        reply_markup=receipt_assignment_checklist_keyboard(people, [])
+        single_assign_message(item_name, amount, 0, len(items)),
+        parse_mode="Markdown",
+        reply_markup=receipt_single_assign_keyboard(people, [], 0),
     )
-
     return RECEIPT_ASSIGN_ITEM
+
 
 async def receipt_assign_item(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
 
     items = context.user_data.get("receipt_items", [])
-    index = context.user_data.get("receipt_assign_index", 0)
     people = context.user_data.get("receipt_people", [])
-    selected = context.user_data.get("receipt_current_selected", [])
+    assignments = context.user_data.setdefault("bulk_assignments", {})
+    index = context.user_data.get("bulk_index", 0)
+    selected = context.user_data.get("bulk_selected", [])
 
-    if index >= len(items):
-        await query.message.reply_text("✅ All items already assigned.")
-        return ConversationHandler.END
+    if query.data == "bulk_noop":
+        return RECEIPT_ASSIGN_ITEM
 
-    item_name, amount = items[index]
-
-    if query.data.startswith("receipt_toggle_"):
-        person = query.data.replace("receipt_toggle_", "", 1)
-
+    if query.data.startswith("bulk_t_"):
+        person_idx = int(query.data.split("_")[2])
+        person = people[person_idx]
         if person in selected:
             selected.remove(person)
         else:
             selected.append(person)
-
-        context.user_data["receipt_current_selected"] = selected
-
+        context.user_data["bulk_selected"] = selected
         await query.edit_message_reply_markup(
-            reply_markup=receipt_assignment_checklist_keyboard(people, selected)
+            reply_markup=receipt_single_assign_keyboard(people, selected, index),
         )
-
         return RECEIPT_ASSIGN_ITEM
 
-    if query.data == "receipt_assignment_confirm":
-        if not selected:
-            await query.answer(
-                "Select at least one person.",
-                show_alert=True
+    if query.data == "bulk_back":
+        prev_index = index - 1
+        assignments.pop(index, None)
+        context.user_data["bulk_index"] = prev_index
+        prev_selected = assignments.get(prev_index, []).copy()
+        context.user_data["bulk_selected"] = prev_selected
+        prev_name, prev_amount = items[prev_index]
+        await query.edit_message_text(
+            single_assign_message(prev_name, prev_amount, prev_index, len(items)),
+            parse_mode="Markdown",
+            reply_markup=receipt_single_assign_keyboard(people, prev_selected, prev_index),
+        )
+        return RECEIPT_ASSIGN_ITEM
+
+    if query.data == "bulk_done":
+        assignments[index] = selected.copy()
+        context.user_data["bulk_assignments"] = assignments
+        next_index = index + 1
+
+        if next_index < len(items):
+            context.user_data["bulk_index"] = next_index
+            context.user_data["bulk_selected"] = []
+            next_name, next_amount = items[next_index]
+            await query.edit_message_text(
+                single_assign_message(next_name, next_amount, next_index, len(items)),
+                parse_mode="Markdown",
+                reply_markup=receipt_single_assign_keyboard(people, [], next_index),
             )
             return RECEIPT_ASSIGN_ITEM
 
-        context.user_data.setdefault(
-            "receipt_assignments",
-            {}
-        )[item_name] = {
-            "amount": amount,
-            "people": selected.copy(),
-        }
-
-        context.user_data["receipt_assign_index"] = index + 1
-        context.user_data["receipt_current_selected"] = []
-
-        await query.message.reply_text(
-            f"✅ Assigned {item_name} to {', '.join(selected)}."
+        await query.edit_message_text(
+            review_assignments_message(items, assignments),
+            parse_mode="Markdown",
+            reply_markup=receipt_review_keyboard(),
         )
+        return RECEIPT_ASSIGN_ITEM
 
-        if context.user_data["receipt_assign_index"] >= len(items):
-            await query.message.reply_text("✅ All items assigned!")
-
-            await send_receipt_split_summary(
-                query.message,
-                context
-            )
-
-            return ConversationHandler.END
-
-        return await ask_receipt_item_assignment(
-            query.message,
-            context
+    if query.data == "bulk_generate":
+        receipt_assignments = {}
+        for i, (name, amt) in enumerate(items):
+            receipt_assignments[name] = {
+                "amount": amt,
+                "people": assignments[i],
+            }
+        context.user_data["receipt_assignments"] = receipt_assignments
+        context.user_data["rtax_selected"] = []
+        await query.edit_message_text(
+            "✅ All items assigned!\n\nDoes this bill include any taxes or charges?",
+            reply_markup=receipt_tax_type_keyboard([]),
         )
+        return RECEIPT_ASSIGN_ITEM
+
+    if query.data == "bulk_reassign":
+        context.user_data["bulk_index"] = 0
+        context.user_data["bulk_selected"] = assignments.get(0, []).copy()
+        item_name, amount = items[0]
+        await query.edit_message_text(
+            single_assign_message(item_name, amount, 0, len(items)),
+            parse_mode="Markdown",
+            reply_markup=receipt_single_assign_keyboard(people, assignments.get(0, []), 0),
+        )
+        return RECEIPT_ASSIGN_ITEM
 
     return RECEIPT_ASSIGN_ITEM
+
+async def handle_receipt_tax(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    selected: list = context.user_data.setdefault("rtax_selected", [])
+
+    if data == "rtax_noop":
+        return
+
+    if data == "rtax_toggle_gst":
+        if "gst" in selected:
+            selected.remove("gst")
+        else:
+            selected.append("gst")
+        context.user_data["rtax_selected"] = selected
+        await query.edit_message_reply_markup(reply_markup=receipt_tax_type_keyboard(selected))
+
+    elif data == "rtax_toggle_service":
+        if "service" in selected:
+            selected.remove("service")
+        else:
+            selected.append("service")
+        context.user_data["rtax_selected"] = selected
+        await query.edit_message_reply_markup(reply_markup=receipt_tax_type_keyboard(selected))
+
+    elif data == "rtax_none":
+        context.user_data["receipt_gst"] = 0.0
+        context.user_data["receipt_service"] = 0.0
+        context.user_data.pop("rtax_selected", None)
+        await query.edit_message_text("No taxes applied.")
+        await send_receipt_split_summary(query.message, context)
+
+    elif data == "rtax_tax_confirm":
+        need_gst     = "gst"     in selected
+        need_service = "service" in selected
+        context.user_data["receipt_need_gst"]     = need_gst
+        context.user_data["receipt_need_service"] = need_service
+        context.user_data.pop("rtax_selected", None)
+        await query.edit_message_text(
+            "Which country are you in?",
+            reply_markup=receipt_country_keyboard(need_gst, need_service),
+        )
+
+    elif data.startswith("rtax_country_"):
+        code = data.replace("rtax_country_", "")
+        need_gst     = context.user_data.get("receipt_need_gst",     False)
+        need_service = context.user_data.get("receipt_need_service", False)
+
+        if code == "other":
+            context.user_data["receipt_tax_stage"] = "gst" if need_gst else "service"
+            if not need_gst:
+                context.user_data["receipt_gst"] = 0.0
+            await query.edit_message_text(
+                "Enter the GST / VAT / tax percentage (e.g. 9), or 0 for none:"
+                if need_gst else
+                "Enter the service charge percentage (e.g. 10), or 0 for none:"
+            )
+        else:
+            label, gst, service, tax_name = KNOWN_COUNTRIES[code]
+            context.user_data["receipt_gst"]      = gst     if need_gst     else 0.0
+            context.user_data["receipt_service"]  = service if need_service else 0.0
+            context.user_data["receipt_tax_name"] = tax_name
+            parts = []
+            if need_gst and gst:
+                parts.append(f"{tax_name} {gst:.0f}%")
+            if need_service and service:
+                parts.append(f"Service {service:.0f}%")
+            await query.edit_message_text(f"{label} — Applying: {', '.join(parts)}")
+            await send_receipt_split_summary(query.message, context)
+
 
 async def send_receipt_split_summary(message_obj, context: ContextTypes.DEFAULT_TYPE) -> None:
     assignments = context.user_data.get("receipt_assignments", {})
     people = context.user_data.get("receipt_people", [])
+    gst = context.user_data.get("receipt_gst", 0.0)
+    service = context.user_data.get("receipt_service", 0.0)
 
     person_totals = {person: 0.0 for person in people}
     person_items = {person: [] for person in people}
@@ -1058,38 +1271,41 @@ async def send_receipt_split_summary(message_obj, context: ContextTypes.DEFAULT_
     for item_name, info in assignments.items():
         amount = info["amount"]
         assigned_people = info["people"]
-
         share = amount / len(assigned_people)
-
         for person in assigned_people:
             person_totals[person] += share
             person_items[person].append((item_name, share))
 
-    lines = [
-        "🧾 RECEIPT SPLIT SUMMARY",
-        "━━━━━━━━━━━━━━━━━━━━━",
-        "",
-    ]
+    tax_name = context.user_data.get("receipt_tax_name", "Tax")
+    base_total = sum(person_totals.values())
+    service_amount = round(base_total * service / 100, 2)
+    subtotal = base_total + service_amount
+    gst_amount = round(subtotal * gst / 100, 2)
+    grand_total = subtotal + gst_amount
 
-    grand_total = sum(person_totals.values())
+    lines = ["🧾 RECEIPT SPLIT SUMMARY", "━━━━━━━━━━━━━━━━━━━━━", ""]
+
+    if service:
+        lines.append(f"  Base total      :  {fmt(base_total)}")
+        lines.append(f"  Service ({service:.0f}%)   :  {fmt(service_amount)}")
+    if gst:
+        lines.append(f"  {tax_name} ({gst:.0f}%) :  {fmt(gst_amount)}")
+    if gst or service:
+        lines += ["  ────────────────────", f"  Grand total   :  {fmt(grand_total)}", ""]
+
+    lines += ["💰 FINAL AMOUNTS TO PAY", "━━━━━━━━━━━━━━━━━━━━━"]
 
     for person in people:
-        lines.append(f"👤 {person}")
-        lines.append(f"💵 Pays: {fmt(person_totals[person])}")
-
+        p_base = person_totals[person]
+        final_share = grand_total * (p_base / base_total) if base_total else 0.0
+        lines.append(f"\n👤 {person}")
+        lines.append(f"💵 Pays: {fmt(final_share)}")
         for item_name, share in person_items[person]:
             lines.append(f"   • {item_name}: {fmt(share)}")
 
-        lines.append("")
+    lines += ["", "━━━━━━━━━━━━━━━━━━━━━", f"💰 Total: {fmt(grand_total)}", "", "Generated by @Keikie_Bot"]
 
-    lines += [
-        "━━━━━━━━━━━━━━━━━━━━━",
-        f"💰 Total: {fmt(grand_total)}",
-        "",
-        "Generated by @Keikie_Bot",
-    ]
-
-    await message_obj.reply_text("\n".join(lines))
+    await message_obj.reply_text("\n".join(lines), reply_markup=done_keyboard())
 
 async def split_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.clear()
@@ -1737,7 +1953,8 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 async def post_init(application: Application) -> None:
     await application.bot.set_my_commands([
         BotCommand("start",   "Start interacting with Keke"),
-        BotCommand("split",   "Start a new bill split"),
+        BotCommand("scan",    "Scan a receipt photo"),
+        BotCommand("split",   "Enter bill manually"),
         BotCommand("restart", "Restart from scratch"),
         BotCommand("cancel",  "Quit current session"),
         BotCommand("help",    "How to use Keke"),
@@ -1755,13 +1972,6 @@ def build_application() -> Application:
         .post_init(post_init)
         .build()
     )
-    app.add_handler(
-    CallbackQueryHandler(
-        receipt_assign_item,
-        pattern="^(receipt_toggle_.+|receipt_assignment_confirm)$"
-    )
-)
-
     ACTION_PATTERN = "^action_(back|restart|exit)$"
 
     conv = ConversationHandler(
@@ -1852,9 +2062,9 @@ def build_application() -> Application:
             ],
             RECEIPT_ASSIGN_ITEM: [
                 CallbackQueryHandler(
-                receipt_assign_item,
-                pattern="^(receipt_toggle_.+|receipt_assignment_confirm)$"
-            ),
+                    receipt_assign_item,
+                    pattern="^(bulk_t_\\d+|bulk_done|bulk_noop|bulk_back|bulk_generate|bulk_reassign)$"
+                ),
             ],
         },
         
@@ -1864,10 +2074,12 @@ def build_application() -> Application:
         ],
     )
     
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_cmd))   
+    app.add_handler(CommandHandler("start",   start))
+    app.add_handler(CommandHandler("scan",    lambda u, c: u.message.reply_text("📸 Send me a photo of your receipt and I'll read it for you!")))
+    app.add_handler(CommandHandler("help",    help_cmd))
     app.add_handler(CommandHandler("restart", restart))
     app.add_handler(CallbackQueryHandler(button_help, pattern="^cmd_help$"))
+    app.add_handler(CallbackQueryHandler(button_scan, pattern="^cmd_scan$"))
     app.add_handler(CallbackQueryHandler(done_bye, pattern="^done_bye$"))
 
     app.add_handler(
@@ -1887,13 +2099,19 @@ def build_application() -> Application:
     app.add_handler(
         CallbackQueryHandler(
             receipt_assign_item,
-            pattern="^(receipt_toggle_.+|receipt_assignment_confirm)$"
+            pattern="^(bulk_t_\\d+|bulk_done|bulk_noop|bulk_back|bulk_generate|bulk_reassign)$"
         )
     )
 
     app.add_handler(MessageHandler(filters.ALL, log_message), group=-1)
     app.add_handler(conv)
 
+    app.add_handler(
+        CallbackQueryHandler(
+            handle_receipt_tax,
+            pattern="^rtax_(toggle_gst|toggle_service|none|noop|tax_confirm|country_.+)$"
+        )
+    )
     app.add_handler(MessageHandler(filters.PHOTO, handle_receipt_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receipt_text_router))
 
