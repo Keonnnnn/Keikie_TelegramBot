@@ -392,9 +392,9 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
     await update.message.reply_text("📸 Got it! Reading your receipt...")
 
     file = await context.bot.get_file(photo.file_id)
-    file_path = "receipt.jpg"
-
-    await file.download_to_drive(file_path)
+    buf = bytearray()
+    await file.download_as_bytearray(buf)
+    image_bytes = bytes(buf)
 
     try:
         await update.message.reply_text("🔍 Detecting items...")
@@ -410,8 +410,6 @@ Rules:
 - Return ONLY a JSON array like: [{"name": "Chicken Rice", "price": 5.50}, ...]
 - No explanation, no markdown, just the raw JSON array"""
 
-        with open(file_path, "rb") as f:
-            image_bytes = f.read()
         image_b64 = base64.b64encode(image_bytes).decode("utf-8")
 
         response = None
