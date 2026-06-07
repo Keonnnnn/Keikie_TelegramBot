@@ -259,9 +259,10 @@ def receipt_country_keyboard(need_gst: bool, need_service: bool) -> InlineKeyboa
 def receipt_confirm_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ Confirm items", callback_data="receipt_confirm")],
-        [InlineKeyboardButton("✏️ Edit item", callback_data="receipt_edit_item")],
+        [InlineKeyboardButton("✏️ Edit item",      callback_data="receipt_edit_item")],
+        [InlineKeyboardButton("🧾 Edit taxes",     callback_data="receipt_edit_taxes_manual")],
         [InlineKeyboardButton("➕ Add missing item", callback_data="receipt_add_item")],
-        [InlineKeyboardButton("📸 Retry receipt", callback_data="receipt_retry")],
+        [InlineKeyboardButton("📸 Retry receipt",  callback_data="receipt_retry")],
     ])
 
 def tax_keyboard(selected: list) -> InlineKeyboardMarkup:
@@ -427,16 +428,28 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
     try:
         await update.message.reply_text("🔍 Detecting items...")
 
-        prompt = """You are a receipt parser. Look at this receipt image and extract only the ordered food/drink items and their prices.
+        prompt = """You are a receipt parser. Look at this receipt image and extract the ordered food/drink items and any taxes or service charges.
 
-Rules:
+Return a JSON object with this exact structure:
+{
+  "items": [{"name": "Chicken Rice", "price": 5.50}, ...],
+  "gst": 9.0,
+  "service_charge": 10.0
+}
+
+Rules for items:
 - Ignore subtotals, totals, GST, service charge, taxes, table numbers, server names, dates, addresses, payment methods
 - Each item should have a clean name and its price in dollars
 - If a quantity is shown (e.g. "2x Escargots $11.80"), keep it as ONE entry with the full price (e.g. {"name": "Escargots (x2)", "price": 11.80}) — do NOT split into separate entries
 - If an item has add-ons or modifiers with a price (e.g. "+ Upsize $1.00"), add that cost to the parent item's total price — do NOT list modifiers as separate items
 - Ignore add-ons that cost $0.00
-- Return ONLY a JSON array like: [{"name": "Chicken Rice", "price": 5.50}, ...]
-- No explanation, no markdown, just the raw JSON array"""
+
+Rules for taxes:
+- Look for GST, VAT, SST, tax, or similar — return the percentage as a number (e.g. 9.0 for 9%)
+- Look for service charge — return the percentage as a number (e.g. 10.0 for 10%)
+- If not found or not applicable, return 0
+
+Return ONLY the raw JSON object. No explanation, no markdown."""
 
         image_b64 = base64.b64encode(image_bytes).decode("utf-8")
 
@@ -466,20 +479,40 @@ Rules:
         raw_json = re.sub(r"\s*```$", "", raw_json)
 
         parsed = json.loads(raw_json)
-        detected_items = [(item["name"], float(item["price"])) for item in parsed if item.get("name") and item.get("price")]
+
+        # Support both old array format and new object format
+        if isinstance(parsed, list):
+            detected_items = [(item["name"], float(item["price"])) for item in parsed if item.get("name") and item.get("price")]
+            detected_gst     = 0.0
+            detected_service = 0.0
+        else:
+            detected_items   = [(item["name"], float(item["price"])) for item in parsed.get("items", []) if item.get("name") and item.get("price")]
+            detected_gst     = float(parsed.get("gst", 0) or 0)
+            detected_service = float(parsed.get("service_charge", 0) or 0)
 
         if detected_items:
-            context.user_data["receipt_items"] = detected_items
+            context.user_data["receipt_items"]   = detected_items
+            context.user_data["receipt_gst"]     = detected_gst
+            context.user_data["receipt_service"] = detected_service
+            context.user_data["receipt_tax_name"] = "GST"
 
-            response = "🧾 Detected items:\n\n"
+            msg = "🧾 Detected items:\n\n"
             for i, (name, amount) in enumerate(detected_items, 1):
-                response += f"{i}. {name} — {fmt(amount)}\n"
-            response += "\nDoes this look correct?"
+                msg += f"{i}. {name} — {fmt(amount)}\n"
 
-            await update.message.reply_text(
-                response,
-                reply_markup=receipt_confirm_keyboard()
-            )
+            tax_lines = []
+            if detected_gst:
+                tax_lines.append(f"GST: {detected_gst:.1f}%")
+            if detected_service:
+                tax_lines.append(f"Service charge: {detected_service:.1f}%")
+            if tax_lines:
+                msg += f"\n🧾 Detected taxes:\n" + "\n".join(f"  • {t}" for t in tax_lines)
+            else:
+                msg += "\n🧾 No taxes detected."
+
+            msg += "\n\nDoes this look correct?"
+
+            await update.message.reply_text(msg, reply_markup=receipt_confirm_keyboard())
         else:
             await update.message.reply_text(
                 "⚠️ AI couldn't find any items. Try a clearer photo.",
@@ -1001,16 +1034,36 @@ async def receipt_custom_tax_input(update: Update, context: ContextTypes.DEFAULT
 
     stage = context.user_data.get("receipt_tax_stage")
 
-    if stage == "gst":
+    if stage in ("gst", "edit_gst"):
         context.user_data["receipt_gst"] = v
-        context.user_data["receipt_tax_stage"] = "service"
+        context.user_data["receipt_tax_stage"] = "service" if stage == "gst" else "edit_service"
         await update.message.reply_text(
             "Enter the service charge percentage (e.g. 10), or 0 for none:"
         )
-    elif stage == "service":
+    elif stage in ("service", "edit_service"):
         context.user_data["receipt_service"] = v
         context.user_data.pop("receipt_tax_stage", None)
-        await send_receipt_split_summary(update.message, context)
+        if stage == "edit_service":
+            # Re-show confirm screen with updated taxes
+            items = context.user_data.get("receipt_items", [])
+            gst     = context.user_data.get("receipt_gst", 0.0)
+            service = context.user_data.get("receipt_service", 0.0)
+            msg = "🧾 Updated items:\n\n"
+            for i, (name, amount) in enumerate(items, 1):
+                msg += f"{i}. {name} — {fmt(amount)}\n"
+            tax_lines = []
+            if gst:
+                tax_lines.append(f"GST: {gst:.1f}%")
+            if service:
+                tax_lines.append(f"Service charge: {service:.1f}%")
+            if tax_lines:
+                msg += "\n🧾 Updated taxes:\n" + "\n".join(f"  • {t}" for t in tax_lines)
+            else:
+                msg += "\n🧾 No taxes."
+            msg += "\n\nDoes this look correct?"
+            await update.message.reply_text(msg, reply_markup=receipt_confirm_keyboard())
+        else:
+            await send_receipt_split_summary(update.message, context)
 
 
 async def receipt_add_item_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1279,12 +1332,28 @@ async def handle_receipt_tax(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 async def handle_receipt_edit_taxes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Edit taxes button on the final summary (after split is generated)."""
     query = update.callback_query
     await query.answer()
     context.user_data["rtax_selected"] = []
     await query.message.reply_text(
         "Does this bill include any taxes or charges?",
         reply_markup=receipt_tax_type_keyboard([]),
+    )
+
+
+async def handle_receipt_edit_taxes_manual(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Edit taxes button shown before confirming items (overrides AI-detected taxes)."""
+    query = update.callback_query
+    await query.answer()
+    gst     = context.user_data.get("receipt_gst", 0.0)
+    service = context.user_data.get("receipt_service", 0.0)
+    context.user_data["receipt_tax_stage"] = "edit_gst"
+    await query.message.reply_text(
+        f"Current detected taxes:\n"
+        f"  • GST: {gst:.1f}%\n"
+        f"  • Service charge: {service:.1f}%\n\n"
+        f"Enter the GST / VAT / tax percentage (e.g. 9), or 0 for none:"
     )
 
 
@@ -2204,6 +2273,13 @@ def build_application() -> Application:
         CallbackQueryHandler(
             handle_receipt_edit_taxes,
             pattern="^receipt_edit_taxes$"
+        )
+    )
+
+    app.add_handler(
+        CallbackQueryHandler(
+            handle_receipt_edit_taxes_manual,
+            pattern="^receipt_edit_taxes_manual$"
         )
     )
     app.add_handler(MessageHandler(filters.PHOTO, handle_receipt_photo))
