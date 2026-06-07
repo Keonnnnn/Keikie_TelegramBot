@@ -316,7 +316,8 @@ def receipt_single_assign_keyboard(people: list, selected: list, index: int) -> 
         person_buttons.append(
             InlineKeyboardButton(f"{tick} {person}", callback_data=f"bulk_t_{j}")
         )
-    rows.append(person_buttons)
+    for i in range(0, len(person_buttons), 3):
+        rows.append(person_buttons[i:i + 3])
     nav = []
     if index > 0:
         nav.append(InlineKeyboardButton("⬅️ Back", callback_data="bulk_back"))
