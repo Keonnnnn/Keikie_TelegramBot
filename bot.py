@@ -557,16 +557,7 @@ Return ONLY the raw JSON object. No explanation, no markdown."""
         await update.message.reply_text(f"⚠️ Something went wrong:\n{e}")
 
 async def log_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not update.message:
-        return
-    user = update.message.from_user
-    name = user.username or user.first_name or "unknown"
-    if update.message.sticker:
-        file_id = update.message.sticker.file_id
-        print(f"[{name}] sent a sticker — file_id: {file_id}")
-        print(f"  👆 Copy that into STICKER_ID at the top of bot_app.py")
-    elif update.message.text:
-        print(f"[{name}]: {update.message.text}")
+    pass
 
 
 # ─────────────────────────────────────────────────────────
