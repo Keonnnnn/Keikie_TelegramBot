@@ -442,10 +442,11 @@ Return a JSON object with this exact structure:
 Rules for items:
 - Ignore subtotals, totals, GST, service charge, taxes, table numbers, server names, dates, addresses, payment methods
 - Each item should have a clean name and its price in dollars
-- If a quantity is shown (e.g. "2x Escargots $11.80"), keep it as ONE entry with the full price (e.g. {"name": "Escargots (x2)", "price": 11.80}) — do NOT split into separate entries
-- If an item has add-ons or modifiers with a price (e.g. "+ Upsize $1.00"), add that cost to the parent item's total price — do NOT list modifiers as separate items
-- Ignore add-ons that cost $0.00
-- If the same item appears multiple times as separate line entries (e.g. two separate rows of "Chicken Rice $5.50"), list each as a SEPARATE entry — append " (1)", " (2)" etc. to make names unique. Do NOT deduplicate or combine them.
+- Count the ACTUAL NUMBER OF LINE ITEMS on the receipt. Your output must have exactly that many entries — one per physical line item on the receipt. Do not merge, deduplicate, or collapse any lines.
+- If a single line shows a quantity greater than 1 printed ON THAT SAME LINE (e.g. "2  Escargots  $23.60"), output ONE entry with the total price and a (x2) suffix: {"name": "Escargots (x2)", "price": 23.60}
+- If the same dish appears on TWO SEPARATE LINES (e.g. two rows both saying "Spaghetti $13.90"), output TWO SEPARATE entries. Append " (1)" and " (2)" to make their names unique: {"name": "Spaghetti (1)", "price": 13.90} and {"name": "Spaghetti (2)", "price": 13.90}
+- If an item has add-ons or modifiers with a price on a separate line (e.g. "+ Upsize $1.00"), add that cost to the parent item's price — do NOT list modifiers as separate items
+- Ignore add-ons and modifiers that cost $0.00
 
 Rules for taxes:
 - Look for GST, VAT, SST, tax, or similar — return the percentage as a number (e.g. 9.0 for 9%)
