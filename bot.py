@@ -403,6 +403,18 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
     if not update.message or not update.message.photo:
         return
 
+    # Clear all receipt-related state to avoid stale data from previous sessions
+    for key in [
+        "receipt_items", "receipt_people", "receipt_people_count",
+        "receipt_person_index", "receipt_stage", "receipt_assign_index",
+        "receipt_assignments", "receipt_gst", "receipt_service",
+        "receipt_tax_name", "receipt_need_gst", "receipt_need_service",
+        "receipt_tax_stage", "receipt_edit_index", "adding_receipt_item",
+        "bulk_assignments", "bulk_index", "bulk_selected",
+        "rtax_selected",
+    ]:
+        context.user_data.pop(key, None)
+
     photo = update.message.photo[-1]
 
     await update.message.reply_text("📸 Got it! Reading your receipt...")
@@ -2122,12 +2134,6 @@ def build_application() -> Application:
             ],
             RECEIPT_ADD_ITEM: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, receipt_add_item_text),
-            ],
-            RECEIPT_PEOPLE_COUNT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, receipt_people_count),
-            ],
-            RECEIPT_PERSON_NAME: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, receipt_person_name),
             ],
             RECEIPT_ASSIGN_ITEM: [
                 CallbackQueryHandler(
