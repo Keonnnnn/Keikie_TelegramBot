@@ -679,7 +679,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_sticker(STICKER_ID)
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("📸  Scan receipt", callback_data="cmd_scan")],
-        [InlineKeyboardButton("✏️  Enter manually", callback_data="cmd_split")],
+        [InlineKeyboardButton("➗  Split a bill", callback_data="cmd_split")],
         [InlineKeyboardButton("💡  How it works", callback_data="cmd_help")],
     ])
     await update.message.reply_text(
@@ -1306,6 +1306,21 @@ async def split_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 
 
 async def split_start_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    context.user_data.clear()
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📸  Scan receipt",   callback_data="cmd_scan")],
+        [InlineKeyboardButton("✏️  Enter manually", callback_data="cmd_split_manual")],
+    ])
+    await query.message.reply_text(
+        "How would you like to split the bill?",
+        reply_markup=keyboard,
+    )
+    return CHOICE
+
+
+async def split_start_manual(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
     context.user_data.clear()
@@ -1983,6 +1998,7 @@ def build_application() -> Application:
         entry_points=[
             CommandHandler("split", split_start),
             CallbackQueryHandler(split_start_button, pattern="^cmd_split$"),
+            CallbackQueryHandler(split_start_manual, pattern="^cmd_split_manual$"),
         ],
         states={
             CHOICE: [
