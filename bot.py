@@ -116,6 +116,12 @@ STATE_LABELS = {
 def fmt(amount: float) -> str:
     return f"${amount:.2f}"
 
+def md_escape(text: str) -> str:
+    """Escape Telegram Markdown v1 special characters in plain text."""
+    for ch in ("*", "_", "`", "["):
+        text = text.replace(ch, f"\\{ch}")
+    return text
+
 def clean_receipt_item_name(name: str) -> str:
     name = name.strip()
 
@@ -1294,9 +1300,9 @@ async def send_receipt_split_summary(message_obj, context: ContextTypes.DEFAULT_
         p_subtotal = p_base + p_service
         p_gst = round(p_subtotal * gst / 100, 2)
 
-        lines.append(f"\n👤 *{person}*")
+        lines.append(f"\n👤 *{md_escape(person)}*")
         for item_name, share in person_items[person]:
-            lines.append(f"   • {item_name}: {fmt(share)}")
+            lines.append(f"   • {md_escape(item_name)}: {fmt(share)}")
         if service:
             lines.append(f"   + Service ({service:.0f}%): {fmt(p_service)}")
         if gst:
