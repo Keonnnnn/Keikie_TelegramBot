@@ -479,9 +479,15 @@ Return ONLY the raw JSON object. No explanation, no markdown."""
                     raise retry_err
 
         raw_json = response.choices[0].message.content.strip()
-        raw_json = re.sub(r"^```json\s*", "", raw_json)
-        raw_json = re.sub(r"^```\s*", "", raw_json)
-        raw_json = re.sub(r"\s*```$", "", raw_json)
+        logging.info("AI raw response: %s", raw_json[:500])
+        # Strip markdown code fences robustly
+        raw_json = re.sub(r"^```(?:json)?\s*", "", raw_json, flags=re.IGNORECASE)
+        raw_json = re.sub(r"\s*```\s*$", "", raw_json, flags=re.DOTALL)
+        raw_json = raw_json.strip()
+        # Extract JSON object if extra text surrounds it
+        json_match = re.search(r"\{[\s\S]*\}", raw_json)
+        if json_match:
+            raw_json = json_match.group(0)
 
         parsed = json.loads(raw_json)
 
@@ -540,7 +546,7 @@ Return ONLY the raw JSON object. No explanation, no markdown."""
             )
 
     except json.JSONDecodeError as e:
-        logging.error("Gemini returned invalid JSON: %s", e)
+        logging.error("Gemini returned invalid JSON: %s | raw: %s", e, raw_json[:300] if 'raw_json' in dir() else "N/A")
         await update.message.reply_text("⚠️ AI returned an unexpected response. Please try again.")
     except Exception as e:
         logging.error("Receipt processing failed: %s", e)
