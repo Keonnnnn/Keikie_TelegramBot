@@ -788,6 +788,12 @@ async def button_scan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     )
 
 
+async def button_scan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text(
+        "📸 Send me a photo of your receipt and I'll read it for you!"
+    )
+
+
 async def button_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
@@ -807,7 +813,7 @@ async def button_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 async def restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.clear()
-    await update.message.reply_text("🔄 Restarted. Send /split to begin.")
+    await update.message.reply_text("🔄 Session cleared. Use /split to start over.")
     return ConversationHandler.END
 
 
@@ -1455,11 +1461,20 @@ async def send_receipt_split_summary(message_obj, context: ContextTypes.DEFAULT_
 
 async def split_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.clear()
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📸  Scan receipt",   callback_data="cmd_scan")],
+        [InlineKeyboardButton("✏️  Enter manually", callback_data="cmd_split_manual")],
+        [InlineKeyboardButton("💡  How it works",   callback_data="cmd_help")],
+    ])
     await update.message.reply_text(
-        "How do you want to split the bill?",
-        reply_markup=split_type_keyboard(),
+        "👋 Hi! I'm Keke, your handy all-in-one assistant!\n\n"
+        "Right now, I can help you split restaurant bills fairly — equally or by individual orders, "
+        "with shared items, GST, and service charge all handled for you. 🧾\n\n"
+        "More useful tools are on the way. Stay tuned! 🛠️\n\n"
+        "What would you like to do?",
+        reply_markup=keyboard,
     )
-    return CHOICE
+    return ConversationHandler.END
 
 
 async def split_start_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -1482,6 +1497,15 @@ async def split_start_manual(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.answer()
     context.user_data.clear()
     await query.message.reply_text(
+        "How do you want to split the bill?",
+        reply_markup=split_type_keyboard(),
+    )
+    return CHOICE
+
+
+async def split_start_manual_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    context.user_data.clear()
+    await update.message.reply_text(
         "How do you want to split the bill?",
         reply_markup=split_type_keyboard(),
     )
@@ -2121,7 +2145,7 @@ async def manual_service(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.clear()
-    await update.message.reply_text("✖️ Session ended. Send /split to start again.")
+    await update.message.reply_text("✖️ Cancelled. Use /split to start a new session.")
     return ConversationHandler.END
 
 
@@ -2131,11 +2155,11 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def post_init(application: Application) -> None:
     await application.bot.set_my_commands([
-        BotCommand("start",   "Start interacting with Keke"),
+        BotCommand("split",   "Split a bill"),
         BotCommand("scan",    "Scan a receipt photo"),
-        BotCommand("split",   "Enter bill manually"),
-        BotCommand("restart", "Restart from scratch"),
-        BotCommand("cancel",  "Quit current session"),
+        BotCommand("manual",  "Enter bill manually"),
+        BotCommand("restart", "Clear current session"),
+        BotCommand("cancel",  "Cancel current session"),
         BotCommand("help",    "How to use Keke"),
     ])
 
@@ -2155,7 +2179,8 @@ def build_application() -> Application:
 
     conv = ConversationHandler(
         entry_points=[
-            CommandHandler("split", split_start),
+            CommandHandler("split",  split_start),
+            CommandHandler("manual", split_start_manual_cmd),
             CallbackQueryHandler(split_start_manual, pattern="^cmd_split_manual$"),
         ],
         states={
@@ -2247,7 +2272,7 @@ def build_application() -> Application:
     )
     
     app.add_handler(CommandHandler("start",   start))
-    app.add_handler(CommandHandler("scan",    lambda u, c: u.message.reply_text("📸 Send me a photo of your receipt and I'll read it for you!")))
+    app.add_handler(CommandHandler("scan",    button_scan_cmd))
     app.add_handler(CommandHandler("help",    help_cmd))
     app.add_handler(CallbackQueryHandler(button_help,        pattern="^cmd_help$"))
     app.add_handler(CallbackQueryHandler(button_scan,        pattern="^cmd_scan$"))
