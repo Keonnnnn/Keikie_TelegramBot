@@ -1648,11 +1648,13 @@ async def _advance_to_next_person_or_shared(query, context: ContextTypes.DEFAULT
     reply = query.message.reply_text
 
     if next_index < context.user_data["people"]:
+        next_name = context.user_data["names"][next_index]
+        context.user_data["current_name"] = next_name
         await reply(
-            f"{progress(context.user_data)}What's the name of Person {next_index + 1}?",
+            f"{progress(context.user_data)}How many items did {next_name} order?",
             reply_markup=ACTION_BAR_MARKUP,
         )
-        return NAME_INDIV
+        return ITEM_COUNT
 
     await reply(
         "All personal items recorded!\n\nDo you have any shared items to add?\n"
