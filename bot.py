@@ -463,6 +463,7 @@ Return ONLY the raw JSON object. No explanation, no markdown."""
             try:
                 response = await openrouter_client.chat.completions.create(
                     model="google/gemini-2.5-flash",
+                    max_tokens=4096,
                     messages=[{
                         "role": "user",
                         "content": [
@@ -1431,9 +1432,9 @@ async def send_receipt_split_summary(message_obj, context: ContextTypes.DEFAULT_
         p_subtotal = p_base + p_service
         p_gst = round(p_subtotal * gst / 100, 2)
 
-        lines.append(f"\n👤 *{md_escape(person)}*")
+        lines.append(f"\n👤 {person}")
         for item_name, share in person_items[person]:
-            lines.append(f"   • {md_escape(item_name)}: {fmt(share)}")
+            lines.append(f"   • {item_name}: {fmt(share)}")
         if service:
             lines.append(f"   + Service ({service:.0f}%): {fmt(p_service)}")
         if gst:
@@ -1456,13 +1457,7 @@ async def send_receipt_split_summary(message_obj, context: ContextTypes.DEFAULT_
     ]
 
     text = "\n".join(lines)
-    try:
-        await message_obj.reply_text(text, parse_mode="Markdown", reply_markup=receipt_done_keyboard())
-    except Exception as e:
-        logging.error("send_receipt_split_summary Markdown failed: %s", e)
-        # Strip markdown formatting and retry as plain text
-        plain = text.replace("*", "")
-        await message_obj.reply_text(plain, reply_markup=receipt_done_keyboard())
+    await message_obj.reply_text(text, reply_markup=receipt_done_keyboard())
 
 async def split_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.clear()
