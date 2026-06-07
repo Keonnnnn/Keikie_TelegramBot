@@ -2259,6 +2259,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("scan",    lambda u, c: u.message.reply_text("📸 Send me a photo of your receipt and I'll read it for you!")))
     app.add_handler(CommandHandler("help",    help_cmd))
     app.add_handler(CommandHandler("restart", restart))
+    app.add_handler(CommandHandler("cancel",  cancel))
     app.add_handler(CallbackQueryHandler(button_help,        pattern="^cmd_help$"))
     app.add_handler(CallbackQueryHandler(button_scan,        pattern="^cmd_scan$"))
     app.add_handler(CallbackQueryHandler(split_start_button, pattern="^cmd_split$"))
