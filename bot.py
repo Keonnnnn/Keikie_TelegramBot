@@ -678,9 +678,9 @@ def build_summary(data: dict) -> str:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_sticker(STICKER_ID)
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📸  Scan receipt", callback_data="cmd_scan")],
-        [InlineKeyboardButton("➗  Split a bill", callback_data="cmd_split")],
-        [InlineKeyboardButton("💡  How it works", callback_data="cmd_help")],
+        [InlineKeyboardButton("📸  Scan receipt",   callback_data="cmd_scan")],
+        [InlineKeyboardButton("✏️  Enter manually", callback_data="cmd_split_manual")],
+        [InlineKeyboardButton("💡  How it works",   callback_data="cmd_help")],
     ])
     await update.message.reply_text(
         "👋 Hi! I'm *Keke*, your handy all-in-one assistant!\n\n"
