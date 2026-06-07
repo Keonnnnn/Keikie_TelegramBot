@@ -1075,6 +1075,8 @@ async def receipt_add_item_text(update: Update, context: ContextTypes.DEFAULT_TY
         context.user_data["receipt_assignments"] = {}
 
         await update.message.reply_text("✅ People added. Next, we’ll assign receipt items.")
+        items_check = context.user_data.get("receipt_items", [])
+        await update.message.reply_text(f"DEBUG: {len(items_check)} items, {len(names)} people")
         await ask_receipt_item_assignment(update.message, context)
         return
 
