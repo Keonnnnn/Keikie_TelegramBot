@@ -2003,7 +2003,8 @@ def build_application() -> Application:
         states={
             CHOICE: [
                 CallbackQueryHandler(choose_split_type, pattern="^split_(equal|individual)$"),
-                # No action bar on the first step
+                CallbackQueryHandler(split_start_manual, pattern="^cmd_split_manual$"),
+                CallbackQueryHandler(button_scan, pattern="^cmd_scan$"),
             ],
             TOTAL: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, get_total),
