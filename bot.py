@@ -434,7 +434,9 @@ Return a JSON object with this exact structure:
 {
   "items": [{"name": "Chicken Rice", "price": 5.50}, ...],
   "gst": 9.0,
-  "service_charge": 10.0
+  "gst_inclusive": false,
+  "service_charge": 10.0,
+  "service_inclusive": false
 }
 
 Rules for items:
@@ -446,8 +448,10 @@ Rules for items:
 
 Rules for taxes:
 - Look for GST, VAT, SST, tax, or similar — return the percentage as a number (e.g. 9.0 for 9%)
-- Look for service charge — return the percentage as a number (e.g. 10.0 for 10%)
-- If not found or not applicable, return 0
+- If the receipt says "inclusive", "incl", "already included", or shows the same total before and after tax — set gst_inclusive to true (meaning it is already baked into item prices, do NOT add on top)
+- If the receipt adds GST as a separate line AFTER the subtotal — set gst_inclusive to false
+- Same logic for service charge — set service_inclusive to true if already included in prices
+- If not found or not applicable, return 0 for the percentage
 
 Return ONLY the raw JSON object. No explanation, no markdown."""
 
@@ -482,18 +486,26 @@ Return ONLY the raw JSON object. No explanation, no markdown."""
 
         # Support both old array format and new object format
         if isinstance(parsed, list):
-            detected_items = [(item["name"], float(item["price"])) for item in parsed if item.get("name") and item.get("price")]
-            detected_gst     = 0.0
-            detected_service = 0.0
+            detected_items     = [(item["name"], float(item["price"])) for item in parsed if item.get("name") and item.get("price")]
+            detected_gst       = 0.0
+            detected_service   = 0.0
+            gst_inclusive      = False
+            service_inclusive  = False
         else:
-            detected_items   = [(item["name"], float(item["price"])) for item in parsed.get("items", []) if item.get("name") and item.get("price")]
-            detected_gst     = float(parsed.get("gst", 0) or 0)
-            detected_service = float(parsed.get("service_charge", 0) or 0)
+            detected_items     = [(item["name"], float(item["price"])) for item in parsed.get("items", []) if item.get("name") and item.get("price")]
+            detected_gst       = float(parsed.get("gst", 0) or 0)
+            detected_service   = float(parsed.get("service_charge", 0) or 0)
+            gst_inclusive      = bool(parsed.get("gst_inclusive", False))
+            service_inclusive  = bool(parsed.get("service_inclusive", False))
+
+        # Only apply taxes that are NOT already included in item prices
+        apply_gst     = detected_gst     if not gst_inclusive     else 0.0
+        apply_service = detected_service if not service_inclusive else 0.0
 
         if detected_items:
             context.user_data["receipt_items"]   = detected_items
-            context.user_data["receipt_gst"]     = detected_gst
-            context.user_data["receipt_service"] = detected_service
+            context.user_data["receipt_gst"]     = apply_gst
+            context.user_data["receipt_service"] = apply_service
             context.user_data["receipt_tax_name"] = "GST"
 
             msg = "🧾 Detected items:\n\n"
@@ -502,11 +514,18 @@ Return ONLY the raw JSON object. No explanation, no markdown."""
 
             tax_lines = []
             if detected_gst:
-                tax_lines.append(f"GST: {detected_gst:.1f}%")
+                if gst_inclusive:
+                    tax_lines.append(f"GST: {detected_gst:.1f}% ✅ already included in prices")
+                else:
+                    tax_lines.append(f"GST: {detected_gst:.1f}% (will be added on top)")
             if detected_service:
-                tax_lines.append(f"Service charge: {detected_service:.1f}%")
+                if service_inclusive:
+                    tax_lines.append(f"Service charge: {detected_service:.1f}% ✅ already included in prices")
+                else:
+                    tax_lines.append(f"Service charge: {detected_service:.1f}% (will be added on top)")
+
             if tax_lines:
-                msg += f"\n🧾 Detected taxes:\n" + "\n".join(f"  • {t}" for t in tax_lines)
+                msg += "\n🧾 Detected taxes:\n" + "\n".join(f"  • {t}" for t in tax_lines)
             else:
                 msg += "\n🧾 No taxes detected."
 
@@ -1233,11 +1252,13 @@ async def receipt_assign_item(update: Update, context: ContextTypes.DEFAULT_TYPE
                 "people": assignments[i],
             }
         context.user_data["receipt_assignments"] = receipt_assignments
-        context.user_data["rtax_selected"] = []
-        await query.edit_message_text(
-            "✅ All items assigned!\n\nDoes this bill include any taxes or charges?",
-            reply_markup=receipt_tax_type_keyboard([]),
-        )
+        await query.edit_message_text("✅ All items assigned!")
+        try:
+            await send_receipt_split_summary(query.message, context)
+        except Exception as e:
+            logging.error("send_receipt_split_summary failed: %s", e)
+            plain = str(e)
+            await query.message.reply_text(f"⚠️ Failed to generate summary: {plain}")
         return RECEIPT_ASSIGN_ITEM
 
     if query.data == "bulk_reassign":
