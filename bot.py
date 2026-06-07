@@ -466,6 +466,7 @@ Return ONLY the raw JSON object. No explanation, no markdown."""
                 response = await openrouter_client.chat.completions.create(
                     model="google/gemini-2.5-flash",
                     max_tokens=4096,
+                    response_format={"type": "json_object"},
                     messages=[{
                         "role": "user",
                         "content": [
@@ -482,7 +483,7 @@ Return ONLY the raw JSON object. No explanation, no markdown."""
                     raise retry_err
 
         raw_json = response.choices[0].message.content.strip()
-        logging.info("AI raw response: %s", raw_json[:500])
+        logging.info("AI raw response (%d chars): %s", len(raw_json), raw_json[:800])
         # Strip markdown code fences robustly
         raw_json = re.sub(r"^```(?:json)?\s*", "", raw_json, flags=re.IGNORECASE)
         raw_json = re.sub(r"\s*```\s*$", "", raw_json, flags=re.DOTALL)
@@ -549,7 +550,7 @@ Return ONLY the raw JSON object. No explanation, no markdown."""
             )
 
     except json.JSONDecodeError as e:
-        logging.error("Gemini returned invalid JSON: %s | raw: %s", e, raw_json[:300] if 'raw_json' in dir() else "N/A")
+        logging.error("Gemini returned invalid JSON: %s | raw: %s", e, raw_json if 'raw_json' in dir() else "N/A")
         await update.message.reply_text("⚠️ AI returned an unexpected response. Please try again.")
     except Exception as e:
         logging.error("Receipt processing failed: %s", e)
