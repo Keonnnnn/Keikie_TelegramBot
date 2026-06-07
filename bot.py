@@ -449,8 +449,8 @@ Rules for items:
 Rules for taxes:
 - Look for GST, VAT, SST, tax, or similar — return the percentage as a number (e.g. 9.0 for 9%)
 - For GST percentage: if the receipt is from Singapore (look for "GST Reg No", "SGD", "Singapore", or .sg addresses), ALWAYS use exactly 9.0 regardless of what calculated percentage appears on the receipt. Do NOT derive the GST percentage from the receipt totals.
-- If the receipt says "inclusive", "incl GST", "price payable includes GST", "already included", or the GST amount appears in parentheses (e.g. "(GST 9.28)") — set gst_inclusive to true (meaning it is already baked into item prices, do NOT add on top)
-- If the receipt adds GST as a clearly separate line item AFTER the subtotal with no indication it is included — set gst_inclusive to false
+- To determine gst_inclusive: add up subtotal + service_charge_amount + gst_amount and check if it equals the final total. If yes, GST is a separate charge (gst_inclusive: false). Only set gst_inclusive to true if there is NO GST line in the totals section at all AND the receipt explicitly states items are priced with GST already included (e.g. "GST inclusive pricing", "all prices include GST"). The phrase "Price payable includes GST" does NOT mean gst_inclusive — it just means the final bill total has GST in it.
+- If the receipt adds GST as a line in the totals section (even if shown in parentheses like "(GST 9.28)"), that means GST is charged separately — set gst_inclusive to false
 - Same logic for service charge — set service_inclusive to true if already included in prices
 - If not found or not applicable, return 0 for the percentage
 
