@@ -202,6 +202,15 @@ def done_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("👋  That's all for now!", callback_data="done_bye")],
     ])
 
+
+def receipt_done_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("✏️  Edit GST / Service charge", callback_data="receipt_edit_taxes")],
+        [InlineKeyboardButton("➗  Split another bill",         callback_data="cmd_split")],
+        [InlineKeyboardButton("🌐  Visit keonshu.com",          url="https://keonshu.com")],
+        [InlineKeyboardButton("👋  That's all for now!",        callback_data="done_bye")],
+    ])
+
 # (label, tax_rate, service_rate, tax_name)
 KNOWN_COUNTRIES = {
     "sg": ("🇸🇬 Singapore", 9.0,  10.0, "GST"),
@@ -557,7 +566,7 @@ def _re_prompt(state: int, data: dict) -> str:
         TOTAL:           "Enter the total bill amount:",
         PEOPLE_EQUAL:    "How many people are splitting the bill?",
         PEOPLE_INDIV:    "How many people are splitting the bill?",
-        NAME_INDIV:      f"{progress(data)}What's the name of Person {data.get('current_person_index', 0) + 1}?",
+        NAME_INDIV:      f"Enter all {data.get('people', '?')} names separated by commas (e.g. Alice, Bob, Charlie):",
         ITEM_COUNT:      f"How many items did {data.get('current_name', '?')} order?",
         ITEM_NAME:       f"What's the name of {data.get('current_name', '?')}'s item {data.get('current_item', '?')}?",
         ITEM_AMOUNT:     f"Enter the amount for {data.get('current_item_name', 'the item')}:",
@@ -793,7 +802,6 @@ async def receipt_actions(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if data == "receipt_confirm":
         context.user_data.pop("adding_receipt_item", None)
-        context.user_data["receipt_stage"] = "people_count"
         items = context.user_data.get("receipt_items", [])
 
         if not items:
@@ -813,14 +821,14 @@ async def receipt_actions(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
         await query.message.reply_text("\n".join(lines))
 
-        context.user_data["receipt_people"] = []
-        context.user_data["receipt_person_index"] = 0
+        context.user_data["receipt_stage"] = "people_names"
 
         await query.message.reply_text(
-            "👥 How many people are splitting this receipt?"
+            "👥 Enter the names of everyone splitting the bill, separated by commas:\n\n"
+            "e.g. Alice, Bob, Charlie"
         )
 
-        return RECEIPT_PEOPLE_COUNT
+        return ConversationHandler.END
     
     elif data == "receipt_edit_item":
         items = context.user_data.get("receipt_items", [])
@@ -1032,52 +1040,24 @@ async def receipt_add_item_text(update: Update, context: ContextTypes.DEFAULT_TY
         )
         return
 
-    if context.user_data.get("receipt_stage") == "people_count":
-        try:
-            count = int(text)
+    if context.user_data.get("receipt_stage") == "people_names":
+        names = [n.strip() for n in text.split(",") if n.strip()]
 
-            if count <= 0:
-                raise ValueError
-
-        except ValueError:
-            await update.message.reply_text("⚠️ Enter a whole number greater than 0.")
+        if not names:
+            await update.message.reply_text(
+                "⚠️ Please enter at least one name, separated by commas.\n\n"
+                "e.g. Alice, Bob, Charlie"
+            )
             return
 
-        context.user_data["receipt_people_count"] = count
-        context.user_data["receipt_people"] = []
-        context.user_data["receipt_person_index"] = 0
-        context.user_data["receipt_stage"] = "person_name"
-
-        await update.message.reply_text("What is Person 1's name?")
-        return
-
-    if context.user_data.get("receipt_stage") == "person_name":
-        name = text
-
-        if not name:
-            await update.message.reply_text("⚠️ Please enter a valid name.")
-            return
-
-        context.user_data["receipt_people"].append(name)
-        context.user_data["receipt_person_index"] += 1
-
-        index = context.user_data["receipt_person_index"]
-        total = context.user_data["receipt_people_count"]
-
-        if index < total:
-            await update.message.reply_text(f"What is Person {index + 1}'s name?")
-            return
-
+        context.user_data["receipt_people"] = names
         context.user_data.pop("receipt_stage", None)
-
         context.user_data["receipt_assign_index"] = 0
         context.user_data["receipt_assignments"] = {}
 
-    await update.message.reply_text(
-    "✅ People added. Next, we’ll assign receipt items."
-)
-
-    await ask_receipt_item_assignment(update.message, context)
+        await update.message.reply_text("✅ People added. Next, we’ll assign receipt items.")
+        await ask_receipt_item_assignment(update.message, context)
+        return
 
 async def ask_receipt_item_assignment(message_obj, context: ContextTypes.DEFAULT_TYPE) -> int:
     items = context.user_data.get("receipt_items", [])
@@ -1257,6 +1237,16 @@ async def handle_receipt_tax(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await send_receipt_split_summary(query.message, context)
 
 
+async def handle_receipt_edit_taxes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    context.user_data["rtax_selected"] = []
+    await query.message.reply_text(
+        "Does this bill include any taxes or charges?",
+        reply_markup=receipt_tax_type_keyboard([]),
+    )
+
+
 async def send_receipt_split_summary(message_obj, context: ContextTypes.DEFAULT_TYPE) -> None:
     assignments = context.user_data.get("receipt_assignments", {})
     people = context.user_data.get("receipt_people", [])
@@ -1303,7 +1293,7 @@ async def send_receipt_split_summary(message_obj, context: ContextTypes.DEFAULT_
 
     lines += ["", "━━━━━━━━━━━━━━━━━━━━━", f"💰 Total: {fmt(grand_total)}", "", "Generated by @Keikie_Bot"]
 
-    await message_obj.reply_text("\n".join(lines), reply_markup=done_keyboard())
+    await message_obj.reply_text("\n".join(lines), reply_markup=receipt_done_keyboard())
 
 async def split_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.clear()
@@ -1421,26 +1411,42 @@ async def get_people_individual(update: Update, context: ContextTypes.DEFAULT_TY
     push_history(context, PEOPLE_INDIV)
     context.user_data["people"] = people
     await update.message.reply_text(
-        f"{progress(context.user_data)}What's the name of Person 1?",
+        f"Enter all {people} names separated by commas:\n\ne.g. Alice, Bob, Charlie",
         reply_markup=ACTION_BAR_MARKUP,
     )
     return NAME_INDIV
 
 
 async def get_name_individual(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    name = update.message.text.strip()
-    if not name:
+    text = update.message.text.strip()
+    expected = context.user_data.get("people", 0)
+    names = [n.strip() for n in text.split(",") if n.strip()]
+
+    if not names:
         await update.message.reply_text(
-            "⚠️ Please enter a valid name.",
+            "⚠️ Please enter at least one name.",
             reply_markup=ACTION_BAR_MARKUP,
         )
         return NAME_INDIV
+
+    if len(names) != expected:
+        await update.message.reply_text(
+            f"⚠️ You said {expected} people but entered {len(names)} name(s).\n\n"
+            f"Please enter exactly {expected} names separated by commas.",
+            reply_markup=ACTION_BAR_MARKUP,
+        )
+        return NAME_INDIV
+
     push_history(context, NAME_INDIV)
-    context.user_data["names"].append(name)
-    context.user_data["amounts_by_person"][name] = []
-    context.user_data["current_name"] = name
+    for name in names:
+        context.user_data["names"].append(name)
+        context.user_data["amounts_by_person"][name] = []
+
+    context.user_data["current_person_index"] = 0
+    first_name = names[0]
+    context.user_data["current_name"] = first_name
     await update.message.reply_text(
-        f"{progress(context.user_data)}How many items did {name} order?",
+        f"{progress(context.user_data)}How many items did {first_name} order?",
         reply_markup=ACTION_BAR_MARKUP,
     )
     return ITEM_COUNT
@@ -2108,6 +2114,13 @@ def build_application() -> Application:
         CallbackQueryHandler(
             handle_receipt_tax,
             pattern="^rtax_(toggle_gst|toggle_service|none|noop|tax_confirm|country_.+)$"
+        )
+    )
+
+    app.add_handler(
+        CallbackQueryHandler(
+            handle_receipt_edit_taxes,
+            pattern="^receipt_edit_taxes$"
         )
     )
     app.add_handler(MessageHandler(filters.PHOTO, handle_receipt_photo))
