@@ -347,7 +347,7 @@ def single_assign_message(item_name: str, amount: float, index: int, total: int)
     return (
         f"*Item {index + 1} of {total}* | {progress_bar}\n"
         f"━━━━━━━━━━━━━━━━━━━━━\n"
-        f"🍽️ *{item_name}*\n"
+        f"🍽️ *{md_escape(item_name)}*\n"
         f"💵 {fmt(amount)}\n"
         f"━━━━━━━━━━━━━━━━━━━━━\n"
         f"Who had this?"
@@ -1069,16 +1069,31 @@ async def receipt_add_item_text(update: Update, context: ContextTypes.DEFAULT_TY
 async def ask_receipt_item_assignment(message_obj, context: ContextTypes.DEFAULT_TYPE) -> int:
     items = context.user_data.get("receipt_items", [])
     people = context.user_data.get("receipt_people", [])
+
+    if not items:
+        await message_obj.reply_text("⚠️ No receipt items found. Please scan your receipt again.")
+        return ConversationHandler.END
+
+    if not people:
+        await message_obj.reply_text("⚠️ No people found. Please try again.")
+        return ConversationHandler.END
+
     context.user_data["bulk_assignments"] = {}
     context.user_data["bulk_index"] = 0
     context.user_data["bulk_selected"] = []
 
-    item_name, amount = items[0]
-    await message_obj.reply_text(
-        single_assign_message(item_name, amount, 0, len(items)),
-        parse_mode="Markdown",
-        reply_markup=receipt_single_assign_keyboard(people, [], 0),
-    )
+    try:
+        item_name, amount = items[0]
+        await message_obj.reply_text(
+            single_assign_message(item_name, amount, 0, len(items)),
+            parse_mode="Markdown",
+            reply_markup=receipt_single_assign_keyboard(people, [], 0),
+        )
+    except Exception as e:
+        logging.error("ask_receipt_item_assignment failed: %s", e)
+        await message_obj.reply_text("⚠️ Something went wrong displaying items. Please try scanning again.")
+        return ConversationHandler.END
+
     return RECEIPT_ASSIGN_ITEM
 
 
@@ -1241,6 +1256,9 @@ async def handle_receipt_tax(update: Update, context: ContextTypes.DEFAULT_TYPE)
             if need_service and service:
                 parts.append(f"Service {service:.0f}%")
             await query.edit_message_text(f"{label} — Applying: {', '.join(parts)}")
+            if not context.user_data.get("receipt_assignments"):
+                await query.message.reply_text("⚠️ Items haven't been assigned yet. Please complete item assignment first.")
+                return
             await send_receipt_split_summary(query.message, context)
 
 
