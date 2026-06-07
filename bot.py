@@ -699,10 +699,10 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     ])
     await update.message.reply_text(
         "💡 *How Keke works*\n\n"
-        "*Equal split* — enter the final receipt total and number of people. "
-        "Everyone pays the same amount.\n\n"
-        "*Individual split* — enter each person's name and their items (name + price). "
-        "Optionally add shared items split among specific people, then choose your taxes.",
+        "📸 *Scan receipt* — snap a photo of your receipt and Keke will read the items automatically. "
+        "You can edit, add, or remove items before splitting.\n\n"
+        "✏️ *Enter manually* — enter each person's name and their ordered items with prices. "
+        "Optionally add shared items (e.g. a shared bottle of wine) split among specific people.",
         parse_mode="Markdown",
         reply_markup=keyboard,
     )
@@ -724,10 +724,10 @@ async def button_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     ])
     await query.message.reply_text(
         "💡 *How Keke works*\n\n"
-        "*Equal split* — enter the final receipt total and number of people. "
-        "Everyone pays the same amount.\n\n"
-        "*Individual split* — enter each person's name and their items (name + price). "
-        "Optionally add shared items split among specific people, then choose your taxes.",
+        "📸 *Scan receipt* — snap a photo of your receipt and Keke will read the items automatically. "
+        "You can edit, add, or remove items before splitting.\n\n"
+        "✏️ *Enter manually* — enter each person's name and their ordered items with prices. "
+        "Optionally add shared items (e.g. a shared bottle of wine) split among specific people.",
         parse_mode="Markdown",
         reply_markup=keyboard,
     )
