@@ -1317,7 +1317,7 @@ async def split_start_button(update: Update, context: ContextTypes.DEFAULT_TYPE)
         "How would you like to split the bill?",
         reply_markup=keyboard,
     )
-    return CHOICE
+    return ConversationHandler.END
 
 
 async def split_start_manual(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -1997,14 +1997,11 @@ def build_application() -> Application:
     conv = ConversationHandler(
         entry_points=[
             CommandHandler("split", split_start),
-            CallbackQueryHandler(split_start_button, pattern="^cmd_split$"),
             CallbackQueryHandler(split_start_manual, pattern="^cmd_split_manual$"),
         ],
         states={
             CHOICE: [
                 CallbackQueryHandler(choose_split_type, pattern="^split_(equal|individual)$"),
-                CallbackQueryHandler(split_start_manual, pattern="^cmd_split_manual$"),
-                CallbackQueryHandler(button_scan, pattern="^cmd_scan$"),
             ],
             TOTAL: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, get_total),
@@ -2100,9 +2097,10 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("scan",    lambda u, c: u.message.reply_text("📸 Send me a photo of your receipt and I'll read it for you!")))
     app.add_handler(CommandHandler("help",    help_cmd))
     app.add_handler(CommandHandler("restart", restart))
-    app.add_handler(CallbackQueryHandler(button_help, pattern="^cmd_help$"))
-    app.add_handler(CallbackQueryHandler(button_scan, pattern="^cmd_scan$"))
-    app.add_handler(CallbackQueryHandler(done_bye, pattern="^done_bye$"))
+    app.add_handler(CallbackQueryHandler(button_help,        pattern="^cmd_help$"))
+    app.add_handler(CallbackQueryHandler(button_scan,        pattern="^cmd_scan$"))
+    app.add_handler(CallbackQueryHandler(split_start_button, pattern="^cmd_split$"))
+    app.add_handler(CallbackQueryHandler(done_bye,           pattern="^done_bye$"))
 
     app.add_handler(
         CallbackQueryHandler(
