@@ -436,7 +436,8 @@ Return a JSON object with this exact structure:
   "gst": 9.0,
   "gst_inclusive": false,
   "service_charge": 10.0,
-  "service_inclusive": false
+  "service_inclusive": false,
+  "grand_total": 44.10
 }
 
 Rules for items:
@@ -455,6 +456,7 @@ Rules for taxes:
 - If the receipt adds GST as a line in the totals section (even if shown in parentheses like "(GST 9.28)"), that means GST is charged separately — set gst_inclusive to false
 - Same logic for service charge — set service_inclusive to true if already included in prices
 - If not found or not applicable, return 0 for the percentage
+- grand_total: the final charged amount on the receipt (the amount paid, after all taxes). Return 0 if not found.
 
 Return ONLY the raw JSON object. No explanation, no markdown."""
 
@@ -502,16 +504,47 @@ Return ONLY the raw JSON object. No explanation, no markdown."""
             detected_service   = 0.0
             gst_inclusive      = False
             service_inclusive  = False
+            detected_grand_total = 0.0
         else:
             detected_items     = [(item["name"], float(item["price"])) for item in parsed.get("items", []) if item.get("name") and item.get("price")]
             detected_gst       = float(parsed.get("gst", 0) or 0)
             detected_service   = float(parsed.get("service_charge", 0) or 0)
             gst_inclusive      = bool(parsed.get("gst_inclusive", False))
             service_inclusive  = bool(parsed.get("service_inclusive", False))
+            detected_grand_total = float(parsed.get("grand_total", 0) or 0)
 
         # Only apply taxes that are NOT already included in item prices
         apply_gst     = detected_gst     if not gst_inclusive     else 0.0
         apply_service = detected_service if not service_inclusive else 0.0
+
+        # Cross-check: if no taxes detected, compare items sum against grand total.
+        # If the total is materially higher than the sum of items, infer taxes by
+        # matching the implied multiplier against known GST/service combinations.
+        if apply_gst == 0.0 and apply_service == 0.0 and detected_grand_total > 0 and detected_items:
+            items_sum = sum(price for _, price in detected_items)
+            if items_sum > 0:
+                implied = detected_grand_total / items_sum
+                # Only attempt inference when the gap is more than 1%
+                if implied > 1.01:
+                    # (gst%, service%) ordered by most common — service applied first, GST on subtotal
+                    candidates = [
+                        (9.0, 10.0),
+                        (9.0,  0.0),
+                        (0.0, 10.0),
+                        (10.0, 0.0),
+                        (6.0, 10.0),
+                        (20.0, 0.0),
+                    ]
+                    for gst_c, svc_c in candidates:
+                        expected = (1 + svc_c / 100) * (1 + gst_c / 100)
+                        if abs(implied - expected) / expected < 0.02:
+                            logging.info(
+                                "Tax cross-check override: implied=%.4f matched GST=%.1f%% svc=%.1f%%",
+                                implied, gst_c, svc_c,
+                            )
+                            apply_gst     = gst_c
+                            apply_service = svc_c
+                            break
 
         if detected_items:
             context.user_data["receipt_items"]   = detected_items
