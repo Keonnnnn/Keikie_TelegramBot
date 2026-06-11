@@ -567,16 +567,14 @@ Return ONLY the raw JSON object. No explanation, no markdown."""
                 msg += f"{i}. {name} — {fmt(amount)}\n"
 
             tax_lines = []
-            if detected_gst:
-                if gst_inclusive:
-                    tax_lines.append(f"GST: {detected_gst:.1f}% ✅ already included in prices")
-                else:
-                    tax_lines.append(f"GST: {detected_gst:.1f}% (will be added on top)")
-            if detected_service:
-                if service_inclusive:
-                    tax_lines.append(f"Service charge: {detected_service:.1f}% ✅ already included in prices")
-                else:
-                    tax_lines.append(f"Service charge: {detected_service:.1f}% (will be added on top)")
+            if apply_gst:
+                tax_lines.append(f"GST: {apply_gst:.1f}% (will be added on top)")
+            elif detected_gst:
+                tax_lines.append(f"GST: {detected_gst:.1f}% ✅ already included in prices")
+            if apply_service:
+                tax_lines.append(f"Service charge: {apply_service:.1f}% (will be added on top)")
+            elif detected_service:
+                tax_lines.append(f"Service charge: {detected_service:.1f}% ✅ already included in prices")
 
             if tax_lines:
                 msg += "\n🧾 Detected taxes:\n" + "\n".join(f"  • {t}" for t in tax_lines)
