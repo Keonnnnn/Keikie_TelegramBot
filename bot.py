@@ -2231,6 +2231,9 @@ def build_application() -> Application:
     app = (
         ApplicationBuilder()
         .token(BOT_TOKEN)
+        .connect_timeout(10)
+        .read_timeout(30)
+        .write_timeout(30)
         .post_init(post_init)
         .build()
     )
