@@ -517,16 +517,26 @@ Return ONLY the raw JSON object. No explanation, no markdown."""
         apply_gst     = detected_gst     if not gst_inclusive     else 0.0
         apply_service = detected_service if not service_inclusive else 0.0
 
-        # Cross-check: if no taxes detected, compare items sum against grand total.
-        # If the total is materially higher than the sum of items, infer taxes by
-        # matching the implied multiplier against known GST/service combinations.
-        if apply_gst == 0.0 and apply_service == 0.0 and detected_grand_total > 0 and detected_items:
+        # Grand total cross-check — pure arithmetic, no extra API calls.
+        if detected_grand_total > 0 and detected_items:
             items_sum = sum(price for _, price in detected_items)
             if items_sum > 0:
                 implied = detected_grand_total / items_sum
-                # Only attempt inference when the gap is more than 1%
-                if implied > 1.01:
-                    # (gst%, service%) ordered by most common — service applied first, GST on subtotal
+
+                if apply_gst > 0 or apply_service > 0:
+                    # AI flagged taxes as separate — but if items_sum ≈ grand_total
+                    # the taxes are already baked into the prices, not added on top.
+                    if abs(implied - 1.0) < 0.02:
+                        logging.info(
+                            "Tax cross-check: items_sum=%.2f ≈ grand_total=%.2f, taxes already inclusive",
+                            items_sum, detected_grand_total,
+                        )
+                        apply_gst     = 0.0
+                        apply_service = 0.0
+
+                elif implied > 1.01:
+                    # No taxes detected but grand total is higher — infer from known multipliers.
+                    # Service is applied to items first, then GST on the subtotal.
                     candidates = [
                         (9.0, 10.0),
                         (9.0,  0.0),
@@ -539,7 +549,7 @@ Return ONLY the raw JSON object. No explanation, no markdown."""
                         expected = (1 + svc_c / 100) * (1 + gst_c / 100)
                         if abs(implied - expected) / expected < 0.02:
                             logging.info(
-                                "Tax cross-check override: implied=%.4f matched GST=%.1f%% svc=%.1f%%",
+                                "Tax cross-check: implied=%.4f matched GST=%.1f%% svc=%.1f%%",
                                 implied, gst_c, svc_c,
                             )
                             apply_gst     = gst_c
