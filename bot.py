@@ -422,10 +422,15 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
 
     await update.message.reply_text("📸 Got it! Reading your receipt...")
 
-    file = await context.bot.get_file(photo.file_id)
-    buf = bytearray()
-    await file.download_as_bytearray(buf)
-    image_bytes = bytes(buf)
+    try:
+        file = await context.bot.get_file(photo.file_id)
+        buf = bytearray()
+        await file.download_as_bytearray(buf)
+        image_bytes = bytes(buf)
+    except Exception as e:
+        logging.error("Failed to download photo: %s", e)
+        await update.message.reply_text("⚠️ Couldn't download your photo. Please try sending it again.")
+        return
 
     # Resize large photos before sending to AI — reduces payload and speeds up the call
     try:
@@ -480,7 +485,7 @@ Return ONLY the raw JSON object. No explanation, no markdown."""
             try:
                 response = await openrouter_client.chat.completions.create(
                     model="google/gemini-2.5-flash",
-                    max_tokens=2048,
+                    max_tokens=4096,
                     response_format={"type": "json_object"},
                     messages=[{
                         "role": "user",
