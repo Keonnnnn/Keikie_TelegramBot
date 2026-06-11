@@ -480,7 +480,7 @@ Return ONLY the raw JSON object. No explanation, no markdown."""
             try:
                 response = await openrouter_client.chat.completions.create(
                     model="google/gemini-2.5-flash",
-                    max_tokens=1024,
+                    max_tokens=2048,
                     response_format={"type": "json_object"},
                     messages=[{
                         "role": "user",
