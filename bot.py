@@ -1,7 +1,9 @@
 from multiprocessing import context
 import os
 import copy
+import io
 import logging
+from PIL import Image
 from dotenv import load_dotenv
 from telegram import (
     BotCommand,
@@ -425,6 +427,17 @@ async def handle_receipt_photo(update: Update, context: ContextTypes.DEFAULT_TYP
     await file.download_as_bytearray(buf)
     image_bytes = bytes(buf)
 
+    # Resize large photos before sending to AI — reduces payload and speeds up the call
+    try:
+        img = Image.open(io.BytesIO(image_bytes))
+        if max(img.size) > 1200:
+            img.thumbnail((1200, 1200), Image.LANCZOS)
+        out = io.BytesIO()
+        img.convert("RGB").save(out, format="JPEG", quality=85, optimize=True)
+        image_bytes = out.getvalue()
+    except Exception:
+        pass  # if compression fails, proceed with original
+
     try:
         await update.message.reply_text("🔍 Detecting items...")
 
@@ -467,7 +480,7 @@ Return ONLY the raw JSON object. No explanation, no markdown."""
             try:
                 response = await openrouter_client.chat.completions.create(
                     model="google/gemini-2.5-flash",
-                    max_tokens=4096,
+                    max_tokens=1024,
                     response_format={"type": "json_object"},
                     messages=[{
                         "role": "user",
