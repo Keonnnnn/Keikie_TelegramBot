@@ -1312,12 +1312,10 @@ async def receipt_assign_item(update: Update, context: ContextTypes.DEFAULT_TYPE
         return RECEIPT_ASSIGN_ITEM
 
     if query.data == "bulk_generate":
-        receipt_assignments = {}
-        for i, (name, amt) in enumerate(items):
-            receipt_assignments[name] = {
-                "amount": amt,
-                "people": assignments[i],
-            }
+        receipt_assignments = [
+            {"name": name, "amount": amt, "people": assignments[i]}
+            for i, (name, amt) in enumerate(items)
+        ]
         context.user_data["receipt_assignments"] = receipt_assignments
         await query.edit_message_text("✅ All items assigned!")
         try:
@@ -1446,7 +1444,7 @@ async def handle_receipt_edit_taxes_manual(update: Update, context: ContextTypes
 
 
 async def send_receipt_split_summary(message_obj, context: ContextTypes.DEFAULT_TYPE) -> None:
-    assignments = context.user_data.get("receipt_assignments", {})
+    assignments = context.user_data.get("receipt_assignments", [])
     people = context.user_data.get("receipt_people", [])
     gst = context.user_data.get("receipt_gst", 0.0)
     service = context.user_data.get("receipt_service", 0.0)
@@ -1454,7 +1452,8 @@ async def send_receipt_split_summary(message_obj, context: ContextTypes.DEFAULT_
     person_totals = {person: 0.0 for person in people}
     person_items = {person: [] for person in people}
 
-    for item_name, info in assignments.items():
+    for info in assignments:
+        item_name = info["name"]
         amount = info["amount"]
         assigned_people = info["people"]
         share = amount / len(assigned_people)
